@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches, coverage & temporary test execution directories
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.test-*/
+.test*
+
+# Large GeoTIFF datasets, orthomosaics & raw inputs
+Stuff/
+*.tif
+*.tiff
+*.partial.tif
+*.aux.xml
+*.tfw
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment configuration & local keys
+.env
+.env.local
+.env.*.local
+
+# IDE, OS & System metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

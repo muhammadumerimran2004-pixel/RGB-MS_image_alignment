@@ -1,0 +1,5 @@
+# WP-7 exploratory validation only.  This does not change application defaults.
+# The default real-data run measured global phase image verification at 0.285;
+# this isolated run permits 0.280 so local-correlation gates can be exercised.
+transform:
+  min_phase_verification_correlation: 0.28

@@ -21,6 +21,11 @@ def write_alignment_report(
     preview_image_path: Path,
     footprint_metrics: FootprintMetrics | None = None,
     rejected_candidates: list[str] | None = None,
+    *,
+    requested_alignment_mode: str | None = None,
+    applied_alignment_mode: str | None = None,
+    fallback: dict | None = None,
+    local_correlation: dict | None = None,
 ) -> Path:
     """
     Serializes a complete, machine-readable alignment report to JSON.
@@ -28,10 +33,16 @@ def write_alignment_report(
     report_path_obj = Path(report_path).resolve()
     report_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
+    requested_mode = requested_alignment_mode or str(config.alignment_mode.value)
+    applied_mode = applied_alignment_mode or str(config.alignment_mode.value)
     report_data = {
         "version": __version__,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "alignment_mode": str(config.alignment_mode.value),
+        "alignment_mode": applied_mode,
+        "requested_alignment_mode": requested_mode,
+        "applied_alignment_mode": applied_mode,
+        "fallback": fallback,
+        "local_correlation": local_correlation,
         "inputs": {
             "rgb_path": str(rgb_meta.path),
             "ms_path": str(ms_meta.path),

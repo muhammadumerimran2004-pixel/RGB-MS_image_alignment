@@ -75,3 +75,23 @@ def test_manual_align_orthomosaics_pipeline(synthetic_geo_tiff_pair, tmp_path: P
         assert dst.count == 4
         assert dst.width > 0
         assert dst.height > 0
+
+
+def test_manual_alignment_accepts_explicit_map_coordinates(synthetic_geo_tiff_pair, tmp_path: Path):
+    rgb_path = synthetic_geo_tiff_pair["rgb_path"]
+    ms_path = synthetic_geo_tiff_pair["ms_path"]
+    with rasterio.open(rgb_path) as rgb_src, rasterio.open(ms_path) as ms_src:
+        pts_rgb = [rgb_src.transform * (10.0, 10.0), rgb_src.transform * (50.0, 50.0)]
+        pts_ms = [ms_src.transform * (12.0, 11.0), ms_src.transform * (52.0, 51.0)]
+
+    result = manual_align_orthomosaics(
+        rgb_path=rgb_path,
+        ms_path=ms_path,
+        output_dir=tmp_path / "manual_map_out",
+        pts_rgb=pts_rgb,
+        pts_ms=pts_ms,
+        coordinate_mode="map",
+        config=AlignmentConfig(alignment_mode=AlignmentMode.MANUAL),
+    )
+
+    assert result.aligned_ms_path.exists()

@@ -40,11 +40,39 @@ Thumbs.db
 *.exe
 *.war
 
-# Large media files
+# Large media & raster datasets
 *.mp4
 *.tiff
+*.tif
+*.partial.tif
+*.aux.xml
+*.tfw
 *.avi
 *.flv
 *.mov
 *.wmv
+
+# Heavy data, test artifacts & results
+Stuff/
+DOCUMENTATION RESULTS/
+TEST_RESULTS_TO_SHARE/
+*RESULT*/
+*RESULTS*/
+.test-*/
+.test*
+
+# Python caches, virtualenvs & packaging
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+venv/
+.venv/
+env/
+ENV/
+python
 

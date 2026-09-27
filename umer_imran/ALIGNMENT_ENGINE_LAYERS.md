@@ -15,16 +15,16 @@ The `drone_alignment` engine provides spatial co-registration of drone Multispec
 │                            User / CLI / API                                 │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
-                  ┌────────────────────┴────────────────────┐
-                  ▼                                         ▼
-   ┌─────────────────────────────┐           ┌─────────────────────────────┐
-   │ Layer 1: Manual Correction  │           │ Layer 2: Automated Pipeline │
-   │ (GCP Point Pair Correction) │           │  (Feature & Phase Matching) │
-   └──────────────┬──────────────┘           └──────────────┬──────────────┘
-                  │                                         │
-                  └────────────────────┬────────────────────┘
-                                       │
-                                       ▼
+      ┌────────────────────────────────┼────────────────────────────────┐
+      ▼                                ▼                                ▼
+┌──────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────────┐
+│ Layer 1: Manual          │ │ Layer 2: Automated       │ │ Layer 2 Alt: Road-Grid   │
+│ (GCP Point Pair)         │ │ (Feature & Phase Match)  │ │ (1D Structural Profiles) │
+└─────────────┬────────────┘ └─────────────┬────────────┘ └─────────────┬────────────┘
+              │                            │                            │
+              └────────────────────────────┼────────────────────────────┘
+                                           │
+                                           ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          Common Shared Foundation                           │
 │  - Spatial I/O & Metadata Extraction (io/reader.py, io/validators.py)       │
@@ -92,7 +92,16 @@ The Automated Pipeline automatically detects corresponding features between mult
 | **Phase 5: Frequency Domain Fallback** | Fallback to Hann-windowed Masked Phase Correlation translation when feature matching yields insufficient inliers. | **COMPLETE** (100%) | `alignment/transform_estimator.py` |
 | **Phase 6: Footprint & Spatial QA Gate** | Verifies native valid data retention ($\ge 80\%$) and reference overlap ($\ge 80\%$) before streaming tiled output. | **COMPLETE** (100%) | `alignment/warper.py`, `quality/metrics.py` |
 
-### 3.2 Future Developmental Roadmap (What's Remaining)
+### 3.3 Road-Grid Structural Alignment Strategy
+
+The **Road-Grid Aligner** (`AlignmentMode.ROAD_GRID`) is an alternative automated strategy that leverages the structural regularity of agricultural drone orthomosaics:
+- **Road Masking (Bright)**: Bright gravel/soil roads maintain strong contrast across RGB and MS bands. Binarization via percentile thresholding (`bright_percentile=90.0`) isolates road paths.
+- **1D Projection Profiles**: Summing binary masks along rows and columns creates 1D structural density profiles.
+- **Primary Cross-Correlation**: Cross-correlating 1D signals computes the primary global offset $(dx_{\text{road}}, dy_{\text{road}})$.
+- **Guardrailed Strip Refinement**: The image is partitioned into $N$ horizontal/vertical strips to refine local offsets within $[dx_{\text{road}} \pm \text{guardrail\_px}]$. This prevents phase-lock / aliasing onto adjacent repeating crop rows.
+- **Consensus & Fallback**: The median offset across valid sub-strips forms the final translation. Optionally verifies dark tree-row alignment as a secondary sanity check.
+
+### 3.4 Developmental Roadmap (What's Remaining)
 
 While the V3 automated pipeline is fully operational and passes all test suites, the following future enhancements are planned:
 
@@ -120,7 +129,7 @@ Every addition to `drone_alignment` must respect these system invariants:
 
 ## 5. Execution Reference
 
-### Interactive Run (Select Manual or Automated via Menu)
+### Interactive Run (Select Manual, Automated, or Road-Grid via Menu)
 ```bash
 python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned" -v
 ```
@@ -133,4 +142,9 @@ python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.t
 ### Direct Automated Mode Run
 ```bash
 python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned" --mode automated --detector orb
+```
+
+### Direct Road-Grid Mode Run
+```bash
+python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned" --mode road_grid
 ```

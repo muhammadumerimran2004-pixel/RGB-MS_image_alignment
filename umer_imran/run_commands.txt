@@ -1,0 +1,86 @@
+================================================================================
+DRONE ALIGNMENT PIPELINE - RUN COMMANDS & EXECUTION GUIDE
+================================================================================
+
+This document outlines the commands needed to run the drone orthomosaic co-registration tool via the Command Prompt (cmd), along with details of the arguments and options you can customize.
+
+--------------------------------------------------------------------------------
+1. BASIC RUN COMMANDS
+--------------------------------------------------------------------------------
+
+To execute the pipeline, open your Command Prompt (cmd) in the project root directory
+(d:\Internship Stuff\Agrilift) and use one of the following commands:
+
+A. Interactive Mode (Prompts you to select the alignment mode):
+   python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned"
+
+B. Fully Automated Mode (Recommended):
+   python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned" --mode automated --verbose
+
+C. Manual Mode (Let's you manually specify Ground Control Points (GCPs)):
+   python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned" --mode manual
+
+D. Road-Grid Mode (Structural alignment for scenes containing roads):
+   python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned" --mode road_grid
+
+E. Feature-Agnostic Local Correlation Mode (safe fallback to verified global alignment):
+   python -m drone_alignment "Stuff/RGB_odm_orthophoto.tif" "Stuff/odm_orthophoto.tif" --output-dir "Stuff/aligned_local_correlation" --mode local-correlation --verbose
+
+--------------------------------------------------------------------------------
+2. EXPLANATION OF WHAT TO CHANGE
+--------------------------------------------------------------------------------
+
+When running the commands, you will need to customize the paths and options based on your dataset:
+
+1. RGB Reference Image Path (First positional argument):
+   - In the commands above: "Stuff/RGB_odm_orthophoto.tif"
+   - What to change: Change this to the path of your reference RGB GeoTIFF file.
+   - Example: "C:\MyFarms\FarmA_RGB.tif"
+
+2. Multispectral (MS) Target Image Path (Second positional argument):
+   - In the commands above: "Stuff/odm_orthophoto.tif"
+   - What to change: Change this to the path of the Multispectral GeoTIFF file that you want to align.
+   - Example: "C:\MyFarms\FarmA_Multispectral.tif"
+
+3. Output Directory (--output-dir / -o):
+   - In the commands above: --output-dir "Stuff/aligned"
+   - What to change: Change "Stuff/aligned" to the path where you want to save the output files. The pipeline generates:
+     * Aligned MS GeoTIFF file (e.g., `aligned.tif` or similar)
+     * Quality assurance preview image (e.g., `alignment_preview.png`)
+     * Detailed JSON report with RMSE and metadata (e.g., `report.json`)
+   - Example: -o "C:\MyFarms\Output\Aligned"
+
+4. Alignment Mode (--mode / -m):
+   - In the commands above: --mode automated
+   - What to change: Choose the alignment strategy that fits your images:
+     * `prompt`    : Shows an interactive menu to choose options (Default).
+     * `automated` : Automatically detects and matches features (SIFT/ORB) between bands.
+     * `manual`    : Lets you manually enter control points (GCPs).
+     * `road_grid` : Employs structural alignment matching roads.
+     * `local_mesh`: Experimental local road/tree mesh-based warping.
+     * `local-correlation`: Feature-agnostic per-cell phase correlation. It uses a verified global baseline and safely falls back to that global alignment if local evidence is rejected.
+
+5. Output Resolution Scale (--resolution / -r):
+   - Usage: --resolution ms OR --resolution rgb
+   - What to change: 
+     * `ms`  : (Default) Preserves the native Multispectral pixel scale (recommended to save space).
+     * `rgb` : Upsamples the MS target to match the higher RGB reference scale.
+
+6. Feature Detector Algorithm (--detector / -d):
+   - Usage: --detector orb OR --detector sift
+   - What to change: Choose between `orb` (fast, default) and `sift` (slower, but can be more robust on complex details).
+
+7. Multispectral Red Band index (--ms-red-band):
+   - Usage: --ms-red-band 1
+   - What to change: The 1-indexed band number corresponding to the Red spectrum in your Multispectral file. Defaults to 1.
+
+8. Verbose Debugging (--verbose / -v):
+   - Usage: Include `-v` or `--verbose` at the end to print detailed debug log statements to the console.
+
+--------------------------------------------------------------------------------
+3. RUNNING TESTING AND VERIFICATION
+--------------------------------------------------------------------------------
+
+To verify your installation and make sure everything is configured properly, you can run:
+
+python -m pytest drone_alignment/tests/ -v --cov=drone_alignment

@@ -1,0 +1,84 @@
+algorithm_version: sentinel-crop-health/1.0.0
+
+paths:
+  green: B3.tif
+  red: B4.tif
+  red_edge: B5.tif
+  nir: B8.tif
+  scl: SCL.tif
+  cloud_probability: MSK_CLDPRB.tif
+  opaque_cloud: MSK_CLASSI_OPAQUE.tif
+  cirrus: MSK_CLASSI_CIRRUS.tif
+  snow_ice: MSK_CLASSI_SNOW_ICE.tif
+  qa60: QA60.tif
+  aot: AOT.tif
+
+io:
+  reflectance_scale: 10000.0
+  crop_window_margin_pixels: 2
+  max_crop_window_pixels: 25000000
+  rasterization: all_touched
+  edge_erosion_pixels: 0
+  use_field_inner_mask: false
+  output_compression: deflate
+  output_tile_size: 512
+
+quality:
+  scl_cloud_classes: [8, 9, 10]
+  scl_shadow_classes: [3]
+  scl_snow_classes: [11]
+  scl_unusable_classes: [0, 1]
+  cloud_probability_threshold: 70.0
+  qa60_cloud_bits: [10, 11]
+  aot_scale: 10000.0
+  aot_haze_threshold: 0.60
+  display_exclusions: [unusable, cloud, shadow, snow, invalid_numeric]
+  analytic_exclusions: [unusable, cloud, shadow, haze, snow, invalid_numeric]
+  vegetation_gate_enabled: false
+  vegetation_gate_ndvi_threshold: 0.05
+  minimum_analytic_pixels: 5
+  display_only_minimum_fraction: 0.15
+  analytics_ready_minimum_fraction: 0.40
+
+spectral:
+  denominator_epsilon: 0.000001
+  enabled_indices: [ndvi, ndre, gndvi, evi2]
+  summary_statistic: mean
+  percentiles: [5, 10, 25, 50, 75, 90, 95]
+
+health:
+  index_ranges:
+    ndvi: {low: 0.15, high: 0.80}
+    ndre: {low: 0.05, high: 0.45}
+    gndvi: {low: 0.08, high: 0.70}
+    evi2: {low: 0.10, high: 0.90}
+  field_weights:
+    ndvi: 0.20
+    ndre: 0.40
+    gndvi: 0.25
+    evi2: 0.15
+  class_thresholds:
+    very_good: 85.0
+    good: 70.0
+    moderate: 55.0
+    weak: 40.0
+  weak_area_index: ndre
+  weak_area_threshold: 0.18
+  pixel_primary_index: ndre
+  pixel_fallback_index: ndvi
+
+h3:
+  resolution: 13
+  metric_crs: EPSG:6933
+  minimum_effective_support: 0.01
+  max_analytic_pixels: 50000
+  max_candidate_cells: 125000
+  batch_size: 5000
+  candidate_estimate_safety_factor: 1.50
+  capacity_policy: fail
+
+artifacts:
+  write_previews: true
+  preview_dpi: 120
+  retain_development_intermediates: true
+
