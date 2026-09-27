@@ -2,6 +2,13 @@ from drone_alignment.alignment.coarse import coarse_align, CoarseAlignmentResult
 from drone_alignment.alignment.feature_detector import detect_features, DetectionResult
 from drone_alignment.alignment.feature_matcher import match_features, MatchResult, InsufficientMatchesError
 from drone_alignment.alignment.loftr_matcher import match_loftr, LoFTRUnavailableError
+from drone_alignment.alignment.arosics_matcher import match_arosics, is_arosics_available, ArosicsUnavailableError
+from drone_alignment.alignment.manual import (
+    is_scipy_available, ManualThinPlateSplineField, ManualAlignmentResult, run_manual_alignment,
+)
+from drone_alignment.alignment.control_points import (
+    ControlPointSet, GeometricModel, build_control_point_set, select_model, validate_geometry,
+)
 from drone_alignment.alignment.representations import build_representation
 from drone_alignment.alignment.transform_estimator import estimate_transform, TransformResult, TransformUnreliableError
 from drone_alignment.alignment.warper import (
@@ -34,6 +41,18 @@ __all__ = [
     "InsufficientMatchesError",
     "match_loftr",
     "LoFTRUnavailableError",
+    "match_arosics",
+    "is_arosics_available",
+    "ArosicsUnavailableError",
+    "is_scipy_available",
+    "ManualThinPlateSplineField",
+    "ManualAlignmentResult",
+    "run_manual_alignment",
+    "ControlPointSet",
+    "GeometricModel",
+    "build_control_point_set",
+    "select_model",
+    "validate_geometry",
     "build_representation",
     "estimate_transform",
     "TransformResult",
@@ -58,3 +77,4 @@ __all__ = [
     "HeldoutCellScore",
     "HeldoutFieldValidation",
 ]
+

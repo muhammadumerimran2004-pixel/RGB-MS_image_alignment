@@ -28,6 +28,24 @@ and records the reason in the JSON report.
   -DetailedLogs
 ```
 
+## AROSICS-assisted automated alignment
+
+AROSICS is installed through the optional project extra. It is a fail-closed
+candidate: the standard automated candidates are tried first, and AROSICS is
+used only if they do not produce an accepted result.
+
+```powershell
+python -m pip install -e '.[arosics,test]'
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath 'C:\data\RGB_odm_orthophoto.tif' `
+  -MsPath 'C:\data\MS_odm_orthophoto.tif' `
+  -OutputDir '.\results\arosics-assisted' `
+  -Mode automated `
+  -EnableArosics `
+  -DetailedLogs
+```
+
 To use a YAML configuration:
 
 ```powershell

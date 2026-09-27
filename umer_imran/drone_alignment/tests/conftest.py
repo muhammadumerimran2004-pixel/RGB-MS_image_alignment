@@ -1,8 +1,17 @@
+import cv2
 import pytest
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 from pathlib import Path
+
+
+def _world_texture(size_px: int, seed: int = 7) -> np.ndarray:
+    """Smooth, non-repeating ground texture in [0, 1]. Deliberately not periodic: a
+    checkerboard has no unique alignment, so it can't test whether registration works."""
+    noise = np.random.default_rng(seed).normal(size=(size_px, size_px)).astype(np.float32)
+    field = cv2.GaussianBlur(noise, (0, 0), sigmaX=6)
+    return (field - field.min()) / (field.max() - field.min())
 
 
 @pytest.fixture
@@ -12,24 +21,35 @@ def synthetic_geo_tiff_pair(tmp_path: Path):
 
     RGB: 512x512, 3 bands, GSD=0.03m (3cm), CRS=EPSG:32643
     MS:  256x256, 4 bands, GSD=0.06m (6cm), CRS=EPSG:32643
-    Both cover overlapping spatial extents.
+    Both image one shared ground texture. The MS georeference is off by
+    ``true_shift_m`` (the MS pixel georeferenced at P shows the ground at
+    P - true_shift_m), so registration has a real, unique answer to find.
     """
     crs = "EPSG:32643"
     origin_x = 500000.0
     origin_y = 3000000.0
+    true_shift_m = (0.12, -0.09)
+
+    # Ground texture sampled at 3 cm, padded 1 m on every side of the RGB footprint.
+    world_gsd, pad_m = 0.03, 1.0
+    world = _world_texture(int(round((512 * 0.03 + 2 * pad_m) / world_gsd)))
+
+    def sample_world(xs_m: np.ndarray, ys_m: np.ndarray) -> np.ndarray:
+        cols = ((xs_m - (origin_x - pad_m)) / world_gsd - 0.5).astype(np.float32)
+        rows = (((origin_y + pad_m) - ys_m) / world_gsd - 0.5).astype(np.float32)
+        return cv2.remap(world, cols, rows, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
     # 1. Generate Synthetic RGB Image (512x512, 3 bands, float32)
     rgb_w, rgb_h = 512, 512
     rgb_gsd = 0.03
     rgb_transform = from_origin(origin_x, origin_y, rgb_gsd, rgb_gsd)
-    
-    # Create checkerboard pattern + random features
+
     xx, yy = np.meshgrid(np.arange(rgb_w), np.arange(rgb_h))
-    pattern = ((xx // 32) + (yy // 32)) % 2
-    rgb_red = (pattern * 150 + 50).astype(np.float32)
-    rgb_green = (pattern * 100 + 30).astype(np.float32)
-    rgb_blue = (pattern * 80 + 20).astype(np.float32)
-    
+    texture = sample_world(origin_x + (xx + 0.5) * rgb_gsd, origin_y - (yy + 0.5) * rgb_gsd)
+    rgb_red = (texture * 180 + 40).astype(np.float32)
+    rgb_green = (texture * 150 + 30).astype(np.float32)
+    rgb_blue = (texture * 120 + 20).astype(np.float32)
+
     rgb_data = np.stack([rgb_red, rgb_green, rgb_blue], axis=0)
 
     rgb_path = tmp_path / "synthetic_rgb.tif"
@@ -55,11 +75,14 @@ def synthetic_geo_tiff_pair(tmp_path: Path):
     ms_transform = from_origin(ms_origin_x, ms_origin_y, ms_gsd, ms_gsd)
 
     ms_xx, ms_yy = np.meshgrid(np.arange(ms_w), np.arange(ms_h))
-    ms_pattern = ((ms_xx // 16) + (ms_yy // 16)) % 2
-    ms_red = (ms_pattern * 140 + 55).astype(np.float32)
-    ms_green = (ms_pattern * 95 + 32).astype(np.float32)
-    ms_re = (ms_pattern * 110 + 40).astype(np.float32)
-    ms_nir = (ms_pattern * 200 + 100).astype(np.float32)
+    ms_texture = sample_world(
+        ms_origin_x + (ms_xx + 0.5) * ms_gsd - true_shift_m[0],
+        ms_origin_y - (ms_yy + 0.5) * ms_gsd - true_shift_m[1],
+    )
+    ms_red = (ms_texture * 170 + 45).astype(np.float32)
+    ms_green = (ms_texture * 140 + 32).astype(np.float32)
+    ms_re = (ms_texture * 110 + 40).astype(np.float32)
+    ms_nir = (ms_texture * 200 + 100).astype(np.float32)
 
     ms_data = np.stack([ms_red, ms_green, ms_re, ms_nir], axis=0)
 
@@ -83,4 +106,5 @@ def synthetic_geo_tiff_pair(tmp_path: Path):
         "rgb_gsd": rgb_gsd,
         "ms_gsd": ms_gsd,
         "crs": crs,
+        "true_shift_m": true_shift_m,
     }

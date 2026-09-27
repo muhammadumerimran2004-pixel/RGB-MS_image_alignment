@@ -1,9 +1,13 @@
 import numpy as np
+import pytest
 
 from drone_alignment.alignment.displacement_field import (
     compare_displacement_fields,
     fit_selected_displacement_field,
     fit_regularized_mesh_field,
+    fit_tapered_thin_plate_spline_field,
+    nearest_control_support,
+    renormalized_taper,
     warp_registration_band_with_field,
 )
 from drone_alignment.alignment.local_evidence import CellMatchStatus, LocalMatchSample, SparseDisplacementResult
@@ -109,3 +113,85 @@ def test_registration_grid_warp_applies_residual_before_inverse_affine():
     # p = inverse(M)(q - residual): at q=10, source x=(10-2)/2=4.
     assert valid[12, 10]
     assert warped[12, 10] == 4.0
+
+
+def test_taper_is_one_at_control_points():
+    """A control point's own support must be exactly 1 regardless of fallback_weight,
+    so the taper there is always exactly 1 (the field must still pass through its own
+    control points, not just approximately)."""
+    control_xy = np.array([[0.0, 0.0], [50.0, 0.0], [0.0, 50.0], [10.0, 10.0]])  # last two are close together
+    support = nearest_control_support(control_xy, control_xy, sigma_px=20.0)
+    np.testing.assert_allclose(support, 1.0)
+
+    for fallback_weight in (0.0, 0.2, 5.0):
+        taper = renormalized_taper(support, fallback_weight)
+        np.testing.assert_allclose(taper, 1.0)
+
+
+def test_taper_decays_to_zero_far_away():
+    control_xy = np.array([[0.0, 0.0], [1.0, 0.0]])
+    far_points = np.array([[10_000.0, 10_000.0]])
+    support = nearest_control_support(far_points, control_xy, sigma_px=10.0)
+    taper = renormalized_taper(support, fallback_weight=0.5)
+    assert taper[0] < 1e-6
+
+
+def test_taper_independent_of_point_density():
+    """Nearest-control support must depend only on distance to the nearest control,
+    not on how many other controls happen to be clustered nearby (the bug this
+    replaces: a density-summed support exceeds 1, and decreasing fallback_weight's
+    effect, wherever many controls happen to cluster)."""
+    query = np.array([[5.0, 0.0]])
+    sparse_controls = np.array([[0.0, 0.0], [100.0, 100.0]])
+    # 50 exactly-coincident duplicates of the same nearest control: a
+    # density-summed support would sum contributions from all 50 and end up
+    # far larger than the sparse case's single contribution.
+    dense_controls = np.array([[0.0, 0.0]] * 50)
+
+    sparse_support = nearest_control_support(query, sparse_controls, sigma_px=10.0)
+    dense_support = nearest_control_support(query, dense_controls, sigma_px=10.0)
+
+    np.testing.assert_allclose(sparse_support, dense_support)
+
+
+def test_taper_memory_bounded():
+    """Support/taper evaluation over a large point set with many controls must not
+    allocate an (n_points, n_controls) dense array, which would be hundreds of MB
+    to several GB at native-tile resolution."""
+    rng = np.random.default_rng(0)
+    controls = rng.uniform(0.0, 500.0, size=(50, 2))
+    points = rng.uniform(0.0, 500.0, size=(4_200_000, 2))  # ~ one 2048x2048 tile
+
+    import tracemalloc
+    tracemalloc.start()
+    support = nearest_control_support(points, controls, sigma_px=50.0)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert support.shape == (len(points),)
+    assert peak < 256 * 1024 * 1024
+
+
+def test_tapered_tps_field_passes_through_its_own_control_points():
+    samples = tuple(
+        LocalMatchSample(
+            row=0, col=0, center_xy=center, source_ms_xy=center, predicted_rgb_xy=center,
+            residual_dx_dy=residual, displacement_dx_dy=residual, confidence=0.9,
+            road_score=None, second_road_score=None, tree_residual_dx_dy=None,
+            status=CellMatchStatus.ACCEPTED,
+        )
+        for center, residual in (
+            ((10.0, 10.0), (2.0, -1.0)),
+            ((90.0, 15.0), (-3.0, 4.0)),
+            ((20.0, 90.0), (1.0, 1.0)),
+            ((80.0, 80.0), (-1.0, -2.0)),
+        )
+    )
+    config = LocalMeshConfig(field_support_radius_px=30.0, field_fallback_weight=0.2, rbf_smoothing=0.0)
+    field = fit_tapered_thin_plate_spline_field(samples, config)
+
+    control_xy = np.array([sample.center_xy for sample in samples])
+    expected = np.array([sample.residual_dx_dy for sample in samples])
+    evaluated = field.evaluate(control_xy)
+
+    np.testing.assert_allclose(evaluated, expected, atol=1e-6)

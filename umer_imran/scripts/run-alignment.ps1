@@ -9,6 +9,16 @@ Runs one Drone Alignment mode from the repository root.
   -OutputDir 'results\automated' `
   -Mode automated `
   -DetailedLogs
+
+.EXAMPLE
+Manual mode from a GCP file instead of interactive prompts:
+.\scripts\run-alignment.ps1 `
+  -RgbPath 'C:\data\rgb.tif' `
+  -MsPath 'C:\data\ms.tif' `
+  -OutputDir 'results\manual' `
+  -Mode manual `
+  -GcpFile 'C:\data\gcps.csv' `
+  -GcpSourceUnits pixel
 #>
 [CmdletBinding()]
 param(
@@ -31,7 +41,34 @@ param(
 
     [switch]$DetailedLogs,
 
-    [switch]$EnableLoFTR
+    [switch]$EnableLoFTR,
+
+    [switch]$EnableArosics,
+
+    [string[]]$ArosicsBandPair,
+
+    [switch]$NoArosicsLocal,
+
+    [double]$ArosicsMaxShiftM,
+
+    [ValidateSet('auto', 'deshifter', 'gdal_tps')]
+    [string]$ArosicsWarpEngine,
+
+    [double]$CropRowPeriodM,
+
+    [string]$GcpFile,
+
+    [ValidateSet('csv', 'qgis')]
+    [string]$GcpFormat,
+
+    [ValidateSet('pixel', 'map')]
+    [string]$GcpSourceUnits,
+
+    [ValidateSet('auto', 'translation', 'similarity', 'affine', 'tps')]
+    [string]$ManualModel,
+
+    [ValidateSet('corner', 'center')]
+    [string]$PixelConvention
 )
 
 Set-StrictMode -Version Latest
@@ -89,6 +126,43 @@ if ($DetailedLogs) {
 }
 if ($EnableLoFTR) {
     $pythonArgs += '--enable-loftr'
+}
+if ($EnableArosics) {
+    $pythonArgs += '--enable-arosics'
+}
+foreach ($pair in $ArosicsBandPair) {
+    $pythonArgs += @('--arosics-band-pair', $pair)
+}
+if ($NoArosicsLocal) {
+    $pythonArgs += '--no-arosics-local'
+}
+if ($PSBoundParameters.ContainsKey('ArosicsMaxShiftM')) {
+    $pythonArgs += @('--arosics-max-shift-m', $ArosicsMaxShiftM)
+}
+if ($ArosicsWarpEngine) {
+    $pythonArgs += @('--arosics-warp-engine', $ArosicsWarpEngine)
+}
+if ($PSBoundParameters.ContainsKey('CropRowPeriodM')) {
+    $pythonArgs += @('--crop-row-period-m', $CropRowPeriodM)
+}
+if ($GcpFile) {
+    $GcpFile = Remove-OuterQuotes $GcpFile
+    if (-not (Test-Path -LiteralPath $GcpFile -PathType Leaf)) {
+        throw "GCP file was not found: $GcpFile"
+    }
+    $pythonArgs += @('--gcp-file', (Resolve-Path -LiteralPath $GcpFile).Path)
+}
+if ($GcpFormat) {
+    $pythonArgs += @('--gcp-format', $GcpFormat)
+}
+if ($GcpSourceUnits) {
+    $pythonArgs += @('--gcp-source-units', $GcpSourceUnits)
+}
+if ($ManualModel) {
+    $pythonArgs += @('--manual-model', $ManualModel)
+}
+if ($PixelConvention) {
+    $pythonArgs += @('--pixel-convention', $PixelConvention)
 }
 
 Write-Host "Running $Mode alignment"

@@ -17,10 +17,15 @@ dependencies = [
   "pydantic>=2.10,<3",
   "PyYAML>=6,<7",
   "matplotlib>=3.9,<4",
+  "click>=8.1,<9",
+  "opencv-python-headless>=4.10,<5",
+  "scipy>=1.11,<2",
+  "scikit-image>=0.21,<1",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-cov>=6,<8"]
+arosics = ["arosics>=1.13,<2"]
 
 [tool.setuptools.packages.find]
 include = ["agrilift_alignment*", "drone_alignment*", "crop_health_sentinel*"]

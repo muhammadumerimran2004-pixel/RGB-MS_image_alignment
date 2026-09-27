@@ -25,6 +25,7 @@ from drone_alignment.alignment.transform_estimator import TransformResult, _fall
 from drone_alignment.alignment.warper import warp_ms_with_displacement_field_tiled
 from drone_alignment.config.schema import AlignmentConfig, CoarseAlignmentConfig, LocalMeshConfig
 from drone_alignment.io.reader import read_metadata
+from drone_alignment.quality.metrics import footprint_gate_failures
 from drone_alignment.quality.visualization import generate_alignment_preview
 
 
@@ -116,13 +117,9 @@ def export_local_mesh_candidate(
             coarse, native_global, field, staged_path, cfg.warp, ms_meta,
             rgb_meta=rgb_meta, return_footprint=True,
         )
-        if (native_footprint.retained_source_valid_ratio < cfg.transform.min_retained_valid_ratio or
-                native_footprint.reference_overlap_ratio < cfg.transform.min_reference_overlap_ratio):
-            raise RuntimeError(
-                "Local mesh native footprint rejected: "
-                f"retained={native_footprint.retained_source_valid_ratio:.2%}, "
-                f"reference_overlap={native_footprint.reference_overlap_ratio:.2%}"
-            )
+        footprint_failures = footprint_gate_failures(native_footprint, cfg.transform)
+        if footprint_failures:
+            raise RuntimeError("Local mesh native footprint rejected: " + "; ".join(footprint_failures))
         os.replace(staged_path, final_path)
     finally:
         if staged_path.exists():

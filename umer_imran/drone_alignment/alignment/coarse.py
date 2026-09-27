@@ -6,7 +6,7 @@ import rasterio
 from rasterio.warp import reproject, Resampling
 from rasterio.transform import from_bounds
 
-from drone_alignment.config.schema import AlignmentConfig, ResolutionMode, RegistrationChannel
+from drone_alignment.config.schema import AlignmentConfig, ResolutionMode
 from drone_alignment.io.reader import RasterMetadata
 from drone_alignment.io.validators import compute_bounding_box_intersection, AlignmentValidationError
 
@@ -71,11 +71,14 @@ def coarse_align(rgb_meta: RasterMetadata, ms_meta: RasterMetadata, config: Alig
         native_gsd = rgb_meta.gsd
     else:
         native_gsd = ms_meta.gsd
-    margin = config.coarse.overlap_margin_px * native_gsd
-    minx = max(minx - margin, min(rgb_meta.bounds[0], ms_meta.bounds[0]))
-    miny = max(miny - margin, min(rgb_meta.bounds[1], ms_meta.bounds[1]))
-    maxx = min(maxx + margin, max(rgb_meta.bounds[2], ms_meta.bounds[2]))
-    maxy = min(maxy + margin, max(rgb_meta.bounds[3], ms_meta.bounds[3]))
+    # The pre-alignment overlap is drawn around where the MS *appears* to be. The
+    # margin leaves room for where it really belongs, clamped to the RGB extent
+    # because MS content beyond the reference has nothing to align to.
+    margin = config.coarse.overlap_margin_m
+    minx = max(minx - margin, rgb_meta.bounds[0])
+    miny = max(miny - margin, rgb_meta.bounds[1])
+    maxx = min(maxx + margin, rgb_meta.bounds[2])
+    maxy = min(maxy + margin, rgb_meta.bounds[3])
 
     native_width = int(math.ceil((maxx - minx) / native_gsd))
     native_height = int(math.ceil((maxy - miny) / native_gsd))
@@ -94,12 +97,22 @@ def coarse_align(rgb_meta: RasterMetadata, ms_meta: RasterMetadata, config: Alig
 
     rgb_source_mask = _source_valid_mask(rgb_meta.path, rgb_meta)
     ms_source_mask = _source_valid_mask(ms_meta.path, ms_meta)
-    band_map = {
+    band_map: dict[str, tuple[int, int]] = {
         "red": (config.rgb_red_band_index, config.ms_red_band_index),
         "green": (config.rgb_green_band_index, config.ms_green_band_index),
     }
+    # Custom AROSICS pairs deliberately use independent names so a red-edge or
+    # NIR pair cannot overwrite the legacy red/green feature-matching bands.
+    if config.arosics.enabled and config.arosics.band_pairs:
+        for pair in config.arosics.band_pairs:
+            band_map[f"arosics:{pair.name}"] = (pair.reference_band, pair.target_band)
+
+    requested_channels = list(dict.fromkeys(c.value for c in config.registration_channel_priority))
+    if config.arosics.enabled and config.arosics.band_pairs:
+        requested_channels.extend(f"arosics:{pair.name}" for pair in config.arosics.band_pairs)
+
     rgb_bands, ms_bands, rgb_masks, ms_masks = {}, {}, [], []
-    for channel in dict.fromkeys(c.value for c in config.registration_channel_priority):
+    for channel in dict.fromkeys(requested_channels):
         rgb_idx, ms_idx = band_map[channel]
         rgb_arr, rgb_mask = _reproject_registration_band(
             rgb_meta.path, rgb_idx, rgb_meta, rgb_source_mask, (reg_height, reg_width), reg_transform, rgb_meta.crs

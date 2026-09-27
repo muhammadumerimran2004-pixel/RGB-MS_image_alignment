@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -8,7 +9,8 @@ from drone_alignment.alignment.coarse import CoarseAlignmentResult
 from drone_alignment.alignment.displacement_field import RegularizedMeshField
 from drone_alignment.alignment.transform_estimator import TransformResult
 from drone_alignment.alignment.warper import (
-    evaluate_native_displacement_footprint, warp_ms_with_displacement_field_tiled,
+    evaluate_native_displacement_footprint, evaluate_native_footprint, evaluate_written_footprint,
+    warp_ms_to_rgb_tiled, warp_ms_with_displacement_field_tiled,
 )
 from drone_alignment.config.schema import TransformType, WarpConfig
 from drone_alignment.io.reader import read_metadata
@@ -95,3 +97,41 @@ def test_displacement_footprint_matches_identity_geometry(tmp_path: Path):
     )
     assert footprint.retained_source_valid_ratio == 1.0
     assert footprint.reference_overlap_ratio == 1.0
+
+
+def test_written_footprint_matches_affine_footprint_for_translation(tmp_path: Path):
+    """evaluate_written_footprint() (reading a mask from an already-written raster)
+    must agree with evaluate_native_footprint() (deriving the mask from the affine
+    TransformResult) when both describe the same translation."""
+    rgb_path, ms_path = tmp_path / "rgb.tif", tmp_path / "ms.tif"
+    aligned_path = tmp_path / "aligned.tif"
+    transform = from_origin(100.0, 200.0, 1.0, 1.0)
+    values = np.ones((64, 64), dtype=np.float32)
+    for path in (rgb_path, ms_path):
+        with rasterio.open(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="float32",
+                           crs="EPSG:32642", transform=transform, nodata=0.0) as dst:
+            dst.write(values, 1)
+    profile = {"driver": "GTiff", "dtype": "float32", "nodata": 0.0, "width": 64, "height": 64,
+               "count": 1, "crs": "EPSG:32642", "transform": transform}
+    coarse = CoarseAlignmentResult(np.empty((64, 64)), np.empty((64, 64)), None, profile, 1.0, 1.0,
+                                   np.ones((32, 32), bool), np.ones((32, 32), bool), {}, {}, output_profile=profile)
+    ms_meta = read_metadata(ms_path)
+    translation = TransformResult(
+        np.array([[1.0, 0.0, 5.0], [0.0, 1.0, -3.0]]), TransformType.AFFINE,
+        (5.0, -3.0), (5.0, -3.0), 0.0, (1.0, 1.0), 1.0, 1, 1,
+    )
+
+    affine_footprint = evaluate_native_footprint(
+        read_metadata(rgb_path), ms_meta, coarse, translation, 256,
+    )
+    warp_ms_to_rgb_tiled(coarse, translation, aligned_path, WarpConfig(tile_size=256), ms_meta)
+    written_footprint = evaluate_written_footprint(
+        read_metadata(rgb_path), ms_meta, aligned_path, profile, 256,
+    )
+
+    assert written_footprint.retained_source_valid_ratio == pytest.approx(
+        affine_footprint.retained_source_valid_ratio, abs=0.02,
+    )
+    assert written_footprint.reference_overlap_ratio == pytest.approx(
+        affine_footprint.reference_overlap_ratio, abs=0.02,
+    )

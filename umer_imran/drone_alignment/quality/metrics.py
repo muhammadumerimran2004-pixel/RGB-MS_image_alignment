@@ -1,7 +1,7 @@
 from dataclasses import dataclass, asdict
 import numpy as np
 
-from drone_alignment.config.schema import QualityConfig
+from drone_alignment.config.schema import QualityConfig, TransformValidationConfig
 
 
 @dataclass
@@ -14,6 +14,8 @@ class SpatialResidualReport:
     grid_residuals: list[dict]
     status: str  # "PASS", "WARNING", "FAIL"
     is_spatial_drift_acceptable: bool
+    holdout_agreement_ratio: float | None = None
+    gross_mismatch_count: int = 0
 
 
 @dataclass
@@ -23,6 +25,23 @@ class FootprintMetrics:
     target_overlap_ratio: float
     overlap_coefficient: float
     intersection_over_union: float
+
+
+def footprint_gate_failures(footprint: FootprintMetrics, transform_cfg: TransformValidationConfig) -> list[str]:
+    """Reasons a footprint fails: only whether the correction pushed the MS off the grid.
+
+    Mutual coverage (reference/target overlap ratios) is reported but never gated. The
+    RGB and MS flights routinely cover different ground (the MS often only the centre of
+    the RGB), so coverage says nothing about whether the transform is right; residual QA
+    and AROSICS verification judge accuracy on whatever ground the two do share.
+    """
+    failures = []
+    if footprint.retained_source_valid_ratio < transform_cfg.min_retained_valid_ratio:
+        failures.append(
+            f"retained valid footprint {footprint.retained_source_valid_ratio:.2%} is below "
+            f"{transform_cfg.min_retained_valid_ratio:.2%}"
+        )
+    return failures
 
 
 def evaluate_footprint(
@@ -62,10 +81,19 @@ def evaluate_spatial_residuals(
     pts_ms_transformed: np.ndarray,
     image_shape: tuple[int, int],
     config: QualityConfig,
+    screen_false_matches: bool = False,
 ) -> SpatialResidualReport:
     """
     Evaluates spatially-partitioned residual errors across a grid mesh.
     Distinguishes center region errors from edge/corner region errors to catch edge drift.
+
+    ``screen_false_matches`` is for held-out *automated* feature matches only. Those
+    are raw descriptor matches that RANSAC never filtered, and between RGB and MS
+    bands a few of them are wrong by hundreds of pixels; one such match can inflate
+    RMSE by two orders of magnitude and reject a transform that fits every other
+    point. They are excluded from the RMSE gates but still count against
+    ``min_holdout_agreement``. Never enable it for manual control points, where a
+    large residual is a real error that must fail.
     """
     h, w = image_shape
     center_min_x = 0.25 * w
@@ -76,13 +104,17 @@ def evaluate_spatial_residuals(
     center_errors = []
     edge_errors = []
     grid_residuals = []
+    gross_mismatch_count = 0
 
     for (x_ref, y_ref), (x_warped, y_warped) in zip(pts_rgb, pts_ms_transformed):
         err = float(np.sqrt((x_ref - x_warped) ** 2 + (y_ref - y_warped) ** 2))
         is_center = (center_min_x <= x_ref <= center_max_x) and (center_min_y <= y_ref <= center_max_y)
-
         region = "center" if is_center else "edge"
-        if is_center:
+        is_gross = screen_false_matches and err > config.holdout_gross_mismatch_px
+
+        if is_gross:
+            gross_mismatch_count += 1
+        elif is_center:
             center_errors.append(err)
         else:
             edge_errors.append(err)
@@ -92,9 +124,25 @@ def evaluate_spatial_residuals(
             "y": float(y_ref),
             "region": region,
             "error_px": float(err),
+            "gross_mismatch": is_gross,
         })
 
+    total_points = len(grid_residuals)
     all_errors = center_errors + edge_errors
+    agreement = (len(all_errors) / total_points) if screen_false_matches and total_points else None
+    if screen_false_matches and total_points and agreement < config.min_holdout_agreement:
+        return SpatialResidualReport(
+            global_rmse_px=float(np.sqrt(np.mean(np.square(all_errors)))) if all_errors else None,
+            center_rmse_px=None,
+            edge_corner_rmse_px=None,
+            max_residual_px=float(np.max(all_errors)) if all_errors else None,
+            residual_drift_ratio=None,
+            grid_residuals=grid_residuals,
+            status="FAIL",
+            is_spatial_drift_acceptable=False,
+            holdout_agreement_ratio=agreement,
+            gross_mismatch_count=gross_mismatch_count,
+        )
     if len(all_errors) == 0:
         return SpatialResidualReport(
             global_rmse_px=0.0,
@@ -131,4 +179,6 @@ def evaluate_spatial_residuals(
         grid_residuals=grid_residuals,
         status=status,
         is_spatial_drift_acceptable=acceptable,
+        holdout_agreement_ratio=agreement,
+        gross_mismatch_count=gross_mismatch_count,
     )

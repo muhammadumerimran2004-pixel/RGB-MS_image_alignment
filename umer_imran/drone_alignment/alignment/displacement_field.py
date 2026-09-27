@@ -13,8 +13,49 @@ from typing import Protocol
 
 import numpy as np
 import cv2
+from scipy.spatial import cKDTree
 
 from drone_alignment.alignment.local_evidence import LocalMatchSample, SparseDisplacementResult
+
+
+def nearest_control_support(
+    points: np.ndarray, control_xy: np.ndarray, sigma_px: float,
+    tree: cKDTree | None = None, chunk: int = 262_144,
+) -> np.ndarray:
+    """Return exp(-d_min^2 / (2*sigma^2)), using each point's *nearest* control.
+
+    A density-summed support (sum of exp(-d_i^2/2*sigma^2) over every
+    control) is not 1 at a control point whenever other controls are nearby
+    (it can exceed 1), and is smaller wherever controls happen to be sparse -
+    i.e. it depends on point *density*, not just distance. Nearest-control
+    support is exactly 1 when evaluated at any control point, independent of
+    how densely the others are packed nearby.
+    """
+    points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    active_tree = tree if tree is not None else cKDTree(control_xy)
+    sigma = max(1.0, sigma_px)
+    support = np.empty(len(points), dtype=np.float64)
+    for start in range(0, len(points), chunk):
+        end = start + chunk
+        distance, _ = active_tree.query(points[start:end], k=1)
+        support[start:end] = np.exp(-(distance ** 2) / (2.0 * sigma ** 2))
+    return support
+
+
+def renormalized_taper(support: np.ndarray, fallback_weight: float) -> np.ndarray:
+    """Taper that is exactly 1 where support == 1 (at a control point) and
+    decays toward 0 as support -> 0, regardless of fallback_weight.
+
+    The naive ``support / (support + fallback_weight)`` used previously is
+    not 1 at support == 1 unless fallback_weight == 0, so the field would
+    quietly stop passing through its own control points as soon as any
+    fallback blending was enabled.
+    """
+    if fallback_weight <= 0.0:
+        return np.ones_like(support)
+    return support * (1.0 + fallback_weight) / (support + fallback_weight)
+
+
 class ResidualField(Protocol):
     name: str
 
@@ -110,7 +151,15 @@ def fit_regularized_mesh_field(
 
 @dataclass(frozen=True)
 class TaperedThinPlateSplineField:
-    """Optional SciPy TPS residual field, blended back to global outside support."""
+    """Optional SciPy TPS residual field, blended back to global outside support.
+
+    ``confidence`` is retained for reporting/introspection but no longer
+    enters the taper (see :func:`nearest_control_support` /
+    :func:`renormalized_taper`): confidence weighting already shapes the
+    fitted residual through ``_controls()``, and folding it into the taper
+    as well made the taper density-dependent rather than purely
+    distance-dependent, which broke the "== 1 at a control point" invariant.
+    """
 
     interpolator_x: object
     interpolator_y: object
@@ -120,12 +169,14 @@ class TaperedThinPlateSplineField:
     fallback_weight: float
     name: str = "tapered_thin_plate_spline"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_control_tree", cKDTree(self.control_xy))
+
     def evaluate(self, xy: np.ndarray) -> np.ndarray:
         points = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
         values = np.column_stack([self.interpolator_x(points), self.interpolator_y(points)])
-        distance_sq = ((points[:, None, :] - self.control_xy[None, :, :]) ** 2).sum(axis=2)
-        support = (self.confidence[None, :] * np.exp(-distance_sq / (2.0 * self.support_radius_px ** 2))).sum(axis=1)
-        taper = support / (support + self.fallback_weight)
+        support = nearest_control_support(points, self.control_xy, self.support_radius_px, tree=self._control_tree)
+        taper = renormalized_taper(support, self.fallback_weight)
         return values * taper[:, None]
 
 

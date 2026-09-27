@@ -1,0 +1,139 @@
+ALIGNMENT ENGINE - MANUAL AND AUTOMATED RUN SCRIPTS
+===================================================
+
+Run every command from the Agrilift repository root in PowerShell.
+Replace the two input TIFF paths and output directory with your own paths.
+
+SET UP / VERIFY THE ENVIRONMENT
+-------------------------------
+python -m pip install -e '.[arosics,test]'
+python -c "from arosics import COREG; print('AROSICS is ready')"
+
+
+1. MANUAL ALIGNMENT (GCP CONTROL POINTS)
+----------------------------------------
+This opens prompts for corresponding RGB and MS control points. Use at least
+eight well-distributed point pairs to make Thin Plate Spline eligible (fewer
+points fall back to affine/similarity/translation - see AROSICS_IMPLEMENTATION_STATUS.md
+for the full model-selection rule).
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath '.\Stuff\RGB_odm_orthophoto.tif' `
+  -MsPath '.\Stuff\odm_orthophoto.tif' `
+  -OutputDir '.\Stuff\aligned-manual' `
+  -Mode manual `
+  -DetailedLogs
+
+Equivalent direct CLI command:
+python -m drone_alignment `
+  '.\Stuff\RGB_odm_orthophoto.tif' `
+  '.\Stuff\odm_orthophoto.tif' `
+  --output-dir '.\Stuff\aligned-manual' `
+  --mode manual --verbose
+
+
+1b. MANUAL ALIGNMENT FROM A GCP FILE (NO PROMPTS)
+--------------------------------------------------
+Skips the interactive prompts and reads control points from a CSV
+(id,rgb_x,rgb_y,ms_x,ms_y[,role]) or a QGIS Georeferencer .points file. Rows
+with role=check are excluded from fitting and instead verify the published
+mapping's accuracy. See docs/MANUAL_GCP_GUIDE.md for the file formats.
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath '.\Stuff\RGB_odm_orthophoto.tif' `
+  -MsPath '.\Stuff\odm_orthophoto.tif' `
+  -OutputDir '.\Stuff\aligned-manual' `
+  -Mode manual `
+  -GcpFile '.\Stuff\gcps.csv' `
+  -GcpSourceUnits pixel `
+  -DetailedLogs
+
+For a QGIS .points file whose source (MS) column is in native pixels rather
+than map units, add -GcpFormat qgis. Force a specific model (skip auto
+selection) with -ManualModel, and control the pixel-index convention with
+-PixelConvention (default 'center': an integer index denotes a pixel's centre).
+
+Equivalent direct CLI command:
+python -m drone_alignment `
+  '.\Stuff\RGB_odm_orthophoto.tif' `
+  '.\Stuff\odm_orthophoto.tif' `
+  --output-dir '.\Stuff\aligned-manual' `
+  --mode manual --gcp-file '.\Stuff\gcps.csv' --gcp-source-units pixel --verbose
+
+
+2. AUTOMATED ALIGNMENT (STANDARD)
+---------------------------------
+Runs the standard automated feature and phase-correlation pipeline, verifying
+one global candidate (ORB/SIFT/phase correlation, or AROSICS' own COREG as a
+last-resort feature-free candidate) before AROSICS COREG_LOCAL refinement is
+attempted on top of it.
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath '.\Stuff\RGB_odm_orthophoto.tif' `
+  -MsPath '.\Stuff\odm_orthophoto.tif' `
+  -OutputDir '.\Stuff\aligned-automated' `
+  -Mode automated `
+  -DetailedLogs
+
+
+3. AUTOMATED ALIGNMENT - AROSICS LOCAL REFINEMENT (DEFAULT ENGINE)
+-------------------------------------------------------------------
+The verified global result (see section 2) is estimated FIRST; AROSICS
+COREG_LOCAL then refines it: it creates and filters local tie points, verifies
+the improvement against an independent holdout, and performs the warp itself
+(its own DESHIFTER, or a streaming GDAL thin-plate-spline warp for large
+rasters). Any rejection at any gate safely republishes the verified global
+result instead - this is enabled by default and does not need a flag; use
+-NoArosicsLocal to disable it and get the global-only result for comparison.
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath '.\Stuff\RGB_odm_orthophoto.tif' `
+  -MsPath '.\Stuff\odm_orthophoto.tif' `
+  -OutputDir '.\Stuff\aligned-arosics' `
+  -Mode automated `
+  -DetailedLogs
+
+To use an arbitrary reference/target pair (for example, reference band 4 and
+target red-edge band 3) as the AROSICS local benchmark, add one or more
+ordered -ArosicsBandPair values via -EnableArosics; the first pair replaces
+the default green-green/red-red candidate.
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath '.\reference_multispectral.tif' `
+  -MsPath '.\target_multispectral.tif' `
+  -OutputDir '.\Stuff\aligned-red-edge' `
+  -Mode automated `
+  -EnableArosics `
+  -ArosicsBandPair 'red_edge:4:3' `
+  -DetailedLogs
+
+Other AROSICS local-refinement tuning flags:
+  -NoArosicsLocal              Disable local refinement (global-only baseline).
+  -ArosicsMaxShiftM <float>    Cap the local search radius in metres.
+  -ArosicsWarpEngine <engine>  'auto' (default), 'deshifter', or 'gdal_tps'.
+  -CropRowPeriodM <float>      Crop row spacing in metres, to guard against
+                                a local search locking onto the wrong row.
+
+.\scripts\run-alignment.ps1 `
+  -RgbPath '.\Stuff\RGB_odm_orthophoto.tif' `
+  -MsPath '.\Stuff\odm_orthophoto.tif' `
+  -OutputDir '.\Stuff\aligned-crop-rows' `
+  -Mode automated `
+  -CropRowPeriodM 0.75 `
+  -DetailedLogs
+
+Equivalent direct CLI command:
+python -m drone_alignment `
+  '.\Stuff\RGB_odm_orthophoto.tif' `
+  '.\Stuff\odm_orthophoto.tif' `
+  --output-dir '.\Stuff\aligned-arosics' `
+  --mode automated --verbose
+
+
+OUTPUTS
+-------
+Each successful run creates an aligned GeoTIFF, alignment preview PNG, and
+JSON alignment report in the selected output directory. The CLI's summary
+prints the JSON report's applied_alignment_mode, and (when relevant) the
+AROSICS holdout before/after medians or the manual model/leave-one-out/
+check-point RMSE.

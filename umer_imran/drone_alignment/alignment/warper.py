@@ -81,6 +81,52 @@ def evaluate_native_footprint(
     )
 
 
+def evaluate_written_footprint(
+    rgb_meta: RasterMetadata, ms_meta: RasterMetadata, aligned_path, profile: dict, tile_size: int,
+) -> FootprintMetrics:
+    """Footprint metrics measured on an already-written aligned raster.
+
+    Unlike :func:`evaluate_native_footprint` (which derives the warped mask
+    from an affine ``TransformResult``) and
+    :func:`evaluate_native_displacement_footprint` (which derives it from a
+    :class:`ResidualField`), this reads the warped mask directly from a
+    raster some other process already wrote - AROSICS' own DESHIFTER, a
+    streaming GDAL TPS warp, or any other engine whose mapping this pipeline
+    does not itself express as an affine matrix or a residual field. It
+    reprojects that raster's mask onto the same grid as the reference and
+    baseline masks, so a bit-for-bit-identical output grid is not required
+    for the comparison to be meaningful.
+    """
+    width, height = profile["width"], profile["height"]
+    base = profile["transform"]
+    rgb_count = baseline_ms_count = warped_ms_count = intersection = union = 0
+    with rasterio.open(rgb_meta.path) as rgb, rasterio.open(ms_meta.path) as ms, \
+         rasterio.open(aligned_path) as aligned:
+        for window in _windows(width, height, tile_size):
+            shape = (int(window.height), int(window.width))
+            dst_transform = base * Affine.translation(window.col_off, window.row_off)
+            rgb_mask = _reproject_valid_mask(rgb, rgb_meta, shape, dst_transform, profile["crs"])
+            ms_base = _reproject_valid_mask(ms, ms_meta, shape, dst_transform, profile["crs"])
+            # aligned_path's bands mirror ms_meta's band layout (the warp
+            # preserves band order/count); ms_meta.alpha_band_index therefore
+            # still identifies the right band on the aligned raster.
+            warped_mask = _reproject_valid_mask(aligned, ms_meta, shape, dst_transform, profile["crs"])
+            rgb_count += int(rgb_mask.sum())
+            baseline_ms_count += int(ms_base.sum())
+            warped_ms_count += int(warped_mask.sum())
+            intersection += int((rgb_mask & warped_mask).sum())
+            union += int((rgb_mask | warped_mask).sum())
+    if not rgb_count or not baseline_ms_count or not warped_ms_count:
+        raise ValueError("Written-raster footprint confirmation produced an empty footprint.")
+    return FootprintMetrics(
+        retained_source_valid_ratio=warped_ms_count / baseline_ms_count,
+        reference_overlap_ratio=intersection / rgb_count,
+        target_overlap_ratio=intersection / warped_ms_count,
+        overlap_coefficient=intersection / min(rgb_count, warped_ms_count),
+        intersection_over_union=intersection / union,
+    )
+
+
 def warp_ms_to_rgb_tiled(
     coarse_result: CoarseAlignmentResult, transform_result: TransformResult,
     output_path: Path, config: WarpConfig, ms_meta: RasterMetadata,

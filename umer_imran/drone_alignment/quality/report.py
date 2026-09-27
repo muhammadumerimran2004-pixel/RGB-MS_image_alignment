@@ -26,6 +26,8 @@ def write_alignment_report(
     applied_alignment_mode: str | None = None,
     fallback: dict | None = None,
     local_correlation: dict | None = None,
+    local_refinement: dict | None = None,
+    manual_control_points: dict | None = None,
 ) -> Path:
     """
     Serializes a complete, machine-readable alignment report to JSON.
@@ -43,6 +45,8 @@ def write_alignment_report(
         "applied_alignment_mode": applied_mode,
         "fallback": fallback,
         "local_correlation": local_correlation,
+        "local_refinement": local_refinement,
+        "manual_control_points": manual_control_points,
         "inputs": {
             "rgb_path": str(rgb_meta.path),
             "ms_path": str(ms_meta.path),
@@ -77,6 +81,8 @@ def write_alignment_report(
             "max_residual_px": quality_report.max_residual_px,
             "residual_drift_ratio": quality_report.residual_drift_ratio,
             "is_spatial_drift_acceptable": quality_report.is_spatial_drift_acceptable,
+            "holdout_agreement_ratio": quality_report.holdout_agreement_ratio,
+            "gross_mismatch_count": quality_report.gross_mismatch_count,
             "grid_residuals_count": len(quality_report.grid_residuals),
         },
         "outputs": {
