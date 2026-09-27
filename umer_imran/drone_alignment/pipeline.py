@@ -25,8 +25,6 @@ from drone_alignment.alignment.feature_detector import (
     detect_features, normalize_to_uint8, InsufficientValidDataError, InsufficientContrastError,
 )
 from drone_alignment.alignment.feature_matcher import match_features, InsufficientMatchesError, MatchResult
-from drone_alignment.alignment.loftr_matcher import match_loftr
-from drone_alignment.alignment.representations import build_representation
 from drone_alignment.alignment.transform_estimator import (
     estimate_transform, _fallback_phase_correlation, validate_phase_transform,
     TransformResult, TransformUnreliableError,
@@ -182,7 +180,7 @@ def _estimate_global_candidate(
     """Estimate the best global candidate.
 
     Returns ``is_verified=True`` when a candidate passed independent QA
-    (classical feature matching, LoFTR, AROSICS' own COREG, or masked-
+    (classical feature matching, AROSICS' own COREG, or masked-
     correlation phase fallback) exactly as before. When every candidate is
     rejected, this no longer raises outright: it instead returns the single
     best computed-but-unverified candidate with ``is_verified=False``, so the
@@ -251,66 +249,6 @@ def _estimate_global_candidate(
                 reason = f"{attempt}: {exc}"
                 rejection_reasons.append(reason)
                 active_log.warning("Rejected candidate %s", reason)
-
-    # Learned matching is deliberately an optional second line.  It is useful
-    # when visible-band descriptors are not repeatable across sensors, but it
-    # never bypasses the exact same geometric and independent QA above.
-    if not accepted and cfg.loftr.enabled:
-        learned_candidate_accepted = False
-        for channel_enum in cfg.registration_channel_priority:
-            channel = channel_enum.value
-            for representation in cfg.loftr.representations:
-                attempt = f"{channel}-{channel}/loftr:{representation.value}"
-                try:
-                    rgb_representation = build_representation(
-                        coarse.registration_bands_rgb[channel], coarse.rgb_valid_mask,
-                        representation, cfg.features,
-                    )
-                    ms_representation = build_representation(
-                        coarse.registration_bands_ms[channel], coarse.ms_valid_mask,
-                        representation, cfg.features,
-                    )
-                    matches = match_loftr(
-                        rgb_representation, ms_representation,
-                        coarse.rgb_valid_mask, coarse.ms_valid_mask, cfg.loftr,
-                    )
-                    if matches.num_good_matches < cfg.features.min_good_matches:
-                        raise InsufficientMatchesError(
-                            f"LoFTR produced {matches.num_good_matches} matches; at least "
-                            f"{cfg.features.min_good_matches} are required."
-                        )
-                    training_matches, verify_rgb, verify_ms = _split_estimation_and_verification(matches)
-                    transform = estimate_transform(
-                        training_matches, 1.0, coarse.registration_gsd, cfg.transform, cfg.features
-                    )
-                    coverage = _inlier_coverage(training_matches.pts_rgb, coarse.rgb_valid_mask.shape)
-                    if coverage < cfg.transform.min_inlier_coverage_ratio:
-                        raise TransformUnreliableError(
-                            f"inlier coverage ({coverage:.2%}) is below minimum "
-                            f"({cfg.transform.min_inlier_coverage_ratio:.2%})"
-                        )
-                    transform = replace(transform, method="loftr", channel_pair=f"{channel}-{channel}")
-                    transform, footprint = _validate_candidate_footprint(transform, coarse, cfg)
-                    if transform.matrix.shape == (2, 3):
-                        transformed = cv2.transform(verify_ms.reshape(-1, 1, 2), transform.matrix).reshape(-1, 2)
-                    else:
-                        transformed = cv2.perspectiveTransform(verify_ms.reshape(-1, 1, 2), transform.matrix).reshape(-1, 2)
-                    quality = evaluate_spatial_residuals(
-                        verify_rgb, transformed, coarse.rgb_valid_mask.shape, cfg.quality, screen_false_matches=True,
-                    )
-                    if quality.status != "PASS":
-                        rejected_pool.append((transform, footprint, quality))
-                        raise TransformUnreliableError(f"independent/residual QA status is {quality.status}")
-                    accepted.append((transform, footprint, quality, verify_rgb, transformed))
-                    active_log.info("Accepted candidate %s with %d/%d inliers", attempt, transform.num_inliers, transform.num_total_matches)
-                    learned_candidate_accepted = True
-                    break
-                except expected_errors as exc:
-                    reason = f"{attempt}: {exc}"
-                    rejection_reasons.append(reason)
-                    active_log.warning("Rejected candidate %s", reason)
-            if learned_candidate_accepted:
-                break
 
     if not accepted and cfg.arosics.enabled and cfg.arosics.global_candidate.enabled:
         if cfg.arosics.band_pairs:
@@ -536,7 +474,7 @@ def align_orthomosaics(
 ) -> AlignmentResult:
     """Estimate and publish the verified global alignment, optionally refined by AROSICS.
 
-    The global candidate (ORB/SIFT/LoFTR/phase/AROSICS-global) is always
+    The global candidate (ORB/SIFT/phase/AROSICS-global) is always
     estimated first. When one of them passes independent QA, AROSICS'
     COREG_LOCAL then refines *that* verified result with a small local search
     and performs the warp itself; a rejection at any of its safety gates

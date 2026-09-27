@@ -60,17 +60,6 @@ from drone_alignment.pipeline import (
     help="1-indexed Red band number in the MS raster file.",
 )
 @click.option(
-    "--enable-loftr",
-    is_flag=True,
-    help="Try optional LoFTR structural matching if ORB/SIFT candidates are rejected.",
-)
-@click.option(
-    "--loftr-max-tiles",
-    type=click.IntRange(1, 144),
-    default=None,
-    help="Bound LoFTR tiles per candidate for a quick trial; omit for the configured default.",
-)
-@click.option(
     "--enable-arosics",
     is_flag=True,
     help="Try optional AROSICS subpixel co-registration candidate.",
@@ -154,8 +143,6 @@ def main(
     resolution: str,
     detector: str,
     ms_red_band: int,
-    enable_loftr: bool,
-    loftr_max_tiles: int | None,
     enable_arosics: bool,
     arosics_band_pairs: tuple[str, ...],
     arosics_local: bool | None,
@@ -197,9 +184,6 @@ def main(
             ms_red_band_index=ms_red_band,
         )
         cfg.features.detector = DetectorType(detector)
-        cfg.loftr.enabled = enable_loftr
-        if loftr_max_tiles is not None:
-            cfg.loftr.max_tiles = loftr_max_tiles
         # AROSICS local co-registration is enabled by the schema default.  The
         # flag is retained for backwards-compatible explicit opt-in, but its
         # absence must not disable the primary automated engine.

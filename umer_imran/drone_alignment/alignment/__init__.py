@@ -1,7 +1,6 @@
 from drone_alignment.alignment.coarse import coarse_align, CoarseAlignmentResult
 from drone_alignment.alignment.feature_detector import detect_features, DetectionResult
 from drone_alignment.alignment.feature_matcher import match_features, MatchResult, InsufficientMatchesError
-from drone_alignment.alignment.loftr_matcher import match_loftr, LoFTRUnavailableError
 from drone_alignment.alignment.arosics_matcher import match_arosics, is_arosics_available, ArosicsUnavailableError
 from drone_alignment.alignment.manual import (
     is_scipy_available, ManualThinPlateSplineField, ManualAlignmentResult, run_manual_alignment,
@@ -39,8 +38,6 @@ __all__ = [
     "match_features",
     "MatchResult",
     "InsufficientMatchesError",
-    "match_loftr",
-    "LoFTRUnavailableError",
     "match_arosics",
     "is_arosics_available",
     "ArosicsUnavailableError",

@@ -11,6 +11,11 @@ Runs one Drone Alignment mode from the repository root.
   -DetailedLogs
 
 .EXAMPLE
+Omit -RgbPath/-MsPath to drag and drop the two images into a window, and omit
+-OutputDir to choose the destination folder in a pop-up dialog:
+.\scripts\run-alignment.ps1 -Mode automated -DetailedLogs
+
+.EXAMPLE
 Manual mode from a GCP file instead of interactive prompts:
 .\scripts\run-alignment.ps1 `
   -RgbPath 'C:\data\rgb.tif' `
@@ -22,13 +27,10 @@ Manual mode from a GCP file instead of interactive prompts:
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
     [string]$RgbPath,
 
-    [Parameter(Mandatory)]
     [string]$MsPath,
 
-    [Parameter(Mandatory)]
     [string]$OutputDir,
 
     [ValidateSet('automated', 'local-correlation', 'road_grid', 'local_mesh', 'manual')]
@@ -40,8 +42,6 @@ param(
     [string]$ConfigPath,
 
     [switch]$DetailedLogs,
-
-    [switch]$EnableLoFTR,
 
     [switch]$EnableArosics,
 
@@ -91,8 +91,155 @@ function Remove-OuterQuotes {
     return $trimmed
 }
 
-$RgbPath = Remove-OuterQuotes $RgbPath
-$MsPath = Remove-OuterQuotes $MsPath
+function Select-InputImages {
+    param([string]$Rgb, [string]$Ms)
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Drone Alignment - input images'
+    $form.ClientSize = New-Object System.Drawing.Size(560, 324)
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.StartPosition = 'CenterScreen'
+    $form.TopMost = $true
+
+    $zones = @{}
+    $nextButton = New-Object System.Windows.Forms.Button
+
+    $refresh = {
+        foreach ($zone in $zones.Values) {
+            if ($zone.Tag.Path) {
+                $zone.Text = "$($zone.Tag.Caption)`n`n$(Split-Path -Leaf $zone.Tag.Path)`n$(Split-Path -Parent $zone.Tag.Path)"
+                $zone.BackColor = [System.Drawing.Color]::FromArgb(214, 238, 214)
+            } else {
+                $zone.Text = "$($zone.Tag.Caption)`n`nDrop the GeoTIFF here, or click to browse"
+                $zone.BackColor = [System.Drawing.Color]::FromArgb(236, 236, 236)
+            }
+        }
+        $nextButton.Enabled = [bool]($zones.Rgb.Tag.Path -and $zones.Ms.Tag.Path)
+    }
+
+    $onDragEnter = {
+        param($source, $e)
+        if ($e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
+            $e.Effect = [System.Windows.Forms.DragDropEffects]::Copy
+        }
+    }
+    # Dropping both files at once onto either zone fills RGB then MS in the
+    # order Explorer reports them, which is not reliable - check, then Swap.
+    $onDragDrop = {
+        param($source, $e)
+        $files = @($e.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop))
+        if ($files.Count -ge 2) {
+            $zones.Rgb.Tag.Path = $files[0]
+            $zones.Ms.Tag.Path = $files[1]
+        } elseif ($files.Count -eq 1) {
+            $source.Tag.Path = $files[0]
+        }
+        & $refresh
+    }
+    $onClick = {
+        param($source, $e)
+        $dialog = New-Object System.Windows.Forms.OpenFileDialog
+        $dialog.Title = "Select the $($source.Tag.Caption)"
+        $dialog.Filter = 'GeoTIFF (*.tif;*.tiff)|*.tif;*.tiff|All files (*.*)|*.*'
+        if ($dialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+            $source.Tag.Path = $dialog.FileName
+            & $refresh
+        }
+    }
+
+    foreach ($spec in @(
+        @{ Key = 'Rgb'; Caption = 'RGB reference orthophoto'; Top = 16; Path = $Rgb },
+        @{ Key = 'Ms'; Caption = 'Multispectral (MS) orthophoto'; Top = 140; Path = $Ms }
+    )) {
+        $zone = New-Object System.Windows.Forms.Label
+        $zone.Location = New-Object System.Drawing.Point(16, $spec.Top)
+        $zone.Size = New-Object System.Drawing.Size(528, 110)
+        $zone.BorderStyle = 'FixedSingle'
+        $zone.TextAlign = 'MiddleCenter'
+        $zone.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $zone.AllowDrop = $true
+        $zone.Tag = @{ Caption = $spec.Caption; Path = $spec.Path }
+        $zone.Add_DragEnter($onDragEnter)
+        $zone.Add_DragDrop($onDragDrop)
+        $zone.Add_Click($onClick)
+        $form.Controls.Add($zone)
+        $zones[$spec.Key] = $zone
+    }
+
+    $swapButton = New-Object System.Windows.Forms.Button
+    $swapButton.Text = 'Swap RGB / MS'
+    $swapButton.Location = New-Object System.Drawing.Point(16, 270)
+    $swapButton.Size = New-Object System.Drawing.Size(130, 36)
+    $swapButton.Add_Click({
+        $held = $zones.Rgb.Tag.Path
+        $zones.Rgb.Tag.Path = $zones.Ms.Tag.Path
+        $zones.Ms.Tag.Path = $held
+        & $refresh
+    })
+    $form.Controls.Add($swapButton)
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = 'Cancel'
+    $cancelButton.Location = New-Object System.Drawing.Point(318, 270)
+    $cancelButton.Size = New-Object System.Drawing.Size(90, 36)
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($cancelButton)
+    $form.CancelButton = $cancelButton
+
+    $nextButton.Text = 'Next: output folder'
+    $nextButton.Location = New-Object System.Drawing.Point(414, 270)
+    $nextButton.Size = New-Object System.Drawing.Size(130, 36)
+    $nextButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($nextButton)
+    $form.AcceptButton = $nextButton
+
+    & $refresh
+    $result = $form.ShowDialog()
+    $form.Dispose()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        throw 'Alignment cancelled: the RGB and MS images were not selected.'
+    }
+    return @($zones.Rgb.Tag.Path, $zones.Ms.Tag.Path)
+}
+
+function Select-OutputFolder {
+    param([string]$StartIn)
+
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = 'Choose the destination folder for the aligned outputs (a new folder is recommended).'
+    $dialog.ShowNewFolderButton = $true
+    if ($StartIn -and (Test-Path -LiteralPath $StartIn -PathType Container)) {
+        $dialog.SelectedPath = $StartIn
+    }
+    # A hidden topmost owner keeps the dialog in front of the console window.
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.TopMost = $true
+    $result = $dialog.ShowDialog($owner)
+    $owner.Dispose()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        throw 'Alignment cancelled: no output folder was selected.'
+    }
+    return $dialog.SelectedPath
+}
+
+if ($RgbPath) {
+    $RgbPath = Remove-OuterQuotes $RgbPath
+}
+if ($MsPath) {
+    $MsPath = Remove-OuterQuotes $MsPath
+}
+if (-not $RgbPath -or -not $MsPath) {
+    $RgbPath, $MsPath = Select-InputImages -Rgb $RgbPath -Ms $MsPath
+}
+if (-not $OutputDir) {
+    $OutputDir = Select-OutputFolder -StartIn (Split-Path -Parent $RgbPath)
+}
 if ($ConfigPath) {
     $ConfigPath = Remove-OuterQuotes $ConfigPath
 }
@@ -123,9 +270,6 @@ if ($ConfigPath) {
 }
 if ($DetailedLogs) {
     $pythonArgs += '--verbose'
-}
-if ($EnableLoFTR) {
-    $pythonArgs += '--enable-loftr'
 }
 if ($EnableArosics) {
     $pythonArgs += '--enable-arosics'

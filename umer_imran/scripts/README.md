@@ -3,6 +3,17 @@
 Run these commands from the repository root in PowerShell. If your PowerShell
 policy blocks local scripts, prefix the command with `powershell -ExecutionPolicy Bypass -File`.
 
+## Quick start (double-click)
+
+Double-click `scripts\Run-Alignment.bat`. A window opens with two drop zones:
+drag the RGB orthophoto onto the top one and the MS orthophoto onto the bottom
+one (or click a zone to browse). You can also drop both files at once and use
+**Swap RGB / MS** if they land the wrong way round. **Next** then pops up a
+folder picker for the destination, and the run starts in the console.
+
+The same window/picker appears whenever `run-alignment.ps1` is called without
+`-RgbPath`/`-MsPath` or `-OutputDir`; passing them skips the pop-ups.
+
 ## Automated alignment
 
 ```powershell

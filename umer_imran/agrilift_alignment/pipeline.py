@@ -8,7 +8,7 @@ from drone_alignment.io.validators import validate_inputs
 from drone_alignment.alignment.coarse import coarse_align
 from .core import AlignmentError, Status
 from .preprocessing import erode_valid_mask, sobel_map, log_map, orientation_map, gabor_orientation_map, gabor_energy_map
-from .registration import phase_proposal, tiled_sift, tiled_local_displacements, tiled_mim_descriptors, loftr_correspondences, fit_affine, fit_similarity
+from .registration import phase_proposal, tiled_sift, tiled_local_displacements, tiled_mim_descriptors, fit_affine, fit_similarity
 from .validation import spatial_coverage, held_out_improvement, split_by_tile
 
 @dataclass(frozen=True)
@@ -43,10 +43,6 @@ def align(rgb_path: Path, ms_path: Path, config: AlignmentConfig | None = None) 
             ("sift", lambda: tiled_sift(rgb,ms,mask,proposal,grid=7)),
             ("mim", lambda: tiled_mim_descriptors(rgb,ms,mask,proposal,grid=7)),
         ]
-        # One learned pass on the strongest cross-spectral energy representation;
-        # it is optional and remains subject to the exact same QA as all others.
-        if mapper is gabor_energy_map:
-            matchers.append(("loftr", lambda: loftr_correspondences(rgb,ms,mask,proposal,grid=7)))
         for matcher_name,matcher in matchers:
           try:
             correspondences=matcher()

@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from agrilift_alignment.core import Space, Transform
 from agrilift_alignment.registration import phase_proposal
-from agrilift_alignment.registration import tiled_local_displacements, tiled_mim_descriptors, loftr_correspondences
+from agrilift_alignment.registration import tiled_local_displacements, tiled_mim_descriptors
 from agrilift_alignment.core import AlignmentError
 from agrilift_alignment.preprocessing import log_map
 from agrilift_alignment.preprocessing import orientation_map
@@ -76,40 +76,4 @@ def test_mim_tiles_create_automatic_correspondences():
     proposal=phase_proposal(source,ms,mask,30)
     c=tiled_mim_descriptors(gabor_orientation_map(source,mask),gabor_orientation_map(ms,mask),mask,proposal,grid=5)
     assert len(c.ms)>=20
-
-def test_loftr_unavailable_fails_closed(monkeypatch):
-    import agrilift_alignment.registration as registration
-    def unavailable(): raise RuntimeError("no weights")
-    monkeypatch.setattr(registration,"_loftr_model",unavailable)
-    image=np.zeros((64,64),np.uint8); mask=np.ones_like(image,bool)
-    proposal=Transform(np.array([[1,0,0],[0,1,0]],float),Space.REGISTRATION,Space.REGISTRATION,"test")
-    with pytest.raises(AlignmentError) as error:
-        loftr_correspondences(image,image,mask,proposal)
-    assert error.value.code=="ERR_LOFTR_UNAVAILABLE"
-
-def test_tiled_loftr_correspondences_mock(monkeypatch):
-    import torch
-    import agrilift_alignment.registration as registration
-
-    class MockLoFTR:
-        def __call__(self, inputs):
-            return {
-                "keypoints0": torch.tensor([[10.0, 10.0], [20.0, 20.0]], dtype=torch.float32),
-                "keypoints1": torch.tensor([[10.0, 10.0], [20.0, 20.0]], dtype=torch.float32),
-                "confidence": torch.tensor([0.9, 0.85], dtype=torch.float32),
-            }
-
-    monkeypatch.setattr(registration, "_loftr_model", lambda: MockLoFTR())
-
-    rng = np.random.default_rng(42)
-    source = (rng.random((300, 300)) * 255).astype(np.uint8)
-    for x, y in [(50, 50), (150, 150), (250, 250), (100, 200)]:
-        cv2.circle(source, (x, y), 10, 255, -1)
-    mask = np.ones_like(source, bool)
-    proposal = Transform(np.array([[1, 0, 0], [0, 1, 0]], float), Space.REGISTRATION, Space.REGISTRATION, "test")
-
-    corr = loftr_correspondences(source, source, mask, proposal, grid=5)
-    assert len(corr.ms) >= 20
-    assert corr.ms.shape[1] == 2
-    assert corr.rgb.shape[1] == 2
 

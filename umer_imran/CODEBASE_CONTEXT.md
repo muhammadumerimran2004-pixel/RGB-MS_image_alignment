@@ -12,7 +12,7 @@
 AgriLift processes aerial and satellite imagery to provide precision crop health analytics for farms. The codebase contains three core operational/experimental subsystems and comprehensive architectural documentation:
 
 1. **`drone_alignment`** — Decoupled spatial co-registration engine for drone imagery. **v4 (current):** V3's verified global pipeline, followed by AROSICS `COREG_LOCAL` coarse-to-fine local refinement and warp, gated by independent holdout/full-grid verification (see §6), plus a rewritten manual GCP mode. The V3 foundation it builds on: warps OpenDroneMap (ODM) Multispectral (MS) orthomosaics onto reference RGB orthomosaic grids using low-resolution registration grids (2048–4096 px), Red-Red / Green-Green spectral matching (ORB/SIFT), candidate validation with independent correspondence splitting, masked phase correlation translation fallback, native-coordinate matrix conjugation ($M_{\text{native}} = S_{\text{destination}}^{-1} \times M_{\text{low\_res}} \times S_{\text{source}}$), tiled full-resolution streaming, native footprint confirmation, and atomic staging/publication.
-2. **`agrilift_alignment`** — Advanced V2 multi-representation registration evidence subsystem. Implements multi-channel preprocessing mappers (Sobel, LoG, orientation, Gabor orientation, Gabor energy), tiled local displacement / SIFT / MIM / LoFTR correspondence extraction, candidate transformation fitting (similarity & affine), and held-out RMSE / spatial coverage validation.
+2. **`agrilift_alignment`** — Advanced V2 multi-representation registration evidence subsystem. Implements multi-channel preprocessing mappers (Sobel, LoG, orientation, Gabor orientation, Gabor energy), tiled local displacement / SIFT / MIM correspondence extraction, candidate transformation fitting (similarity & affine), and held-out RMSE / spatial coverage validation.
 3. **`crop_health_sentinel`** — Sentinel-2 satellite spectral reporting pipeline (5-layer architecture: Quality, Spectral, Health, H3 Spatial Aggregation, Report).
 
 ---
@@ -45,8 +45,7 @@ d:/Internship Stuff/Agrilift/
 │   │   ├── feature_detector.py          # Stage 2A: Keypoint detection (ORB/SIFT on Red/Green channels)
 │   │   ├── feature_matcher.py           # Stage 2B: KNN descriptor matching & Lowe ratio test
 │   │   ├── transform_estimator.py       # Stage 2C: RANSAC Affine/Homography, phase correlation fallback & validation
-│   │   ├── loftr_matcher.py             # Optional LoFTR structural matching candidate (--enable-loftr)
-│   │   ├── representations.py           # Image representations (normalized, Gabor energy) for LoFTR/local modes
+│   │   ├── representations.py           # Image representations (normalized, Gabor energy) for local modes
 │   │   ├── warper.py                    # Stage 3: Windowed tiled raster streaming & native mask evaluation
 │   │   ├── road_grid_aligner.py         # Road-grid mode: 1D road-profile translation (separate mode)
 │   │   ├── local_mesh_aligner.py        # Experimental local mesh mode: sparse, road-constrained (off by default)
@@ -82,7 +81,7 @@ d:/Internship Stuff/Agrilift/
 │   ├── core.py                          # Transform dataclasses, coordinate spaces & matrix conversions
 │   ├── pipeline.py                      # Multi-mapper orchestrator & candidate evaluation loop
 │   ├── preprocessing.py                 # Multi-spectral mappers (Sobel, LoG, orientation, Gabor energy/orientation)
-│   ├── registration.py                  # Phase proposals, tiled local/SIFT/MIM/LoFTR matchers & candidate fitters
+│   ├── registration.py                  # Phase proposals, tiled local/SIFT/MIM matchers & candidate fitters
 │   ├── validation.py                    # Spatial coverage & held-out RMSE validation metrics
 │   └── tests/                           # Pytest suite for agrilift_alignment
 │       └── test_direction.py
@@ -154,7 +153,7 @@ When modifying or extending `drone_alignment`, adhere strictly to these architec
 6. **Windowed Memory Footprint & Streaming**: Always use windowed rasterio reading and tiled block writing (`tile_size=2048`) for output GeoTIFFs. Never attempt full float32 in-memory allocation of unclipped full-extent orthomosaics.
 7. **Atomic Staging & Publication**: Write output to run-scoped staging paths (`.partial.tif`) and perform atomic replacement (`os.replace`) only after all bands, native mask checks, thumbnail QA previews, and JSON reports pass.
 8. **Headless OpenCV**: Use `opencv-python-headless` for all image operations to ensure compatibility with server and container environments.
-9. **Candidate Order & Publication Rule (v4)**: Global candidates are tried in the order `ORB/SIFT (Green, then Red) → LoFTR (if enabled) → AROSICS COREG (feature-free) → masked phase correlation`. Then AROSICS `COREG_LOCAL` refines the winner. A result is published only if it passes **our classical residual QA** or **AROSICS local refinement's own gates**, never neither. An unverified global candidate is a `COREG_LOCAL` starting point only, and is never published by itself. See §6.
+9. **Candidate Order & Publication Rule (v4)**: Global candidates are tried in the order `ORB/SIFT (Green, then Red) → AROSICS COREG (feature-free) → masked phase correlation`. Then AROSICS `COREG_LOCAL` refines the winner. A result is published only if it passes **our classical residual QA** or **AROSICS local refinement's own gates**, never neither. An unverified global candidate is a `COREG_LOCAL` starting point only, and is never published by itself. See §6.
 11. **Held-out QA screens false matches; manual QA never does**: automated feature-match verification calls `evaluate_spatial_residuals(..., screen_false_matches=True)` (points beyond `quality.holdout_gross_mismatch_px` are excluded from RMSE, and `quality.min_holdout_agreement` of them must agree). Manual control points use the unscreened default, because a large residual there is a real human error.
 12. **Footprint gating is in one place and ignores coverage differences**: every mode calls `footprint_gate_failures()` (`quality/metrics.py`), whose only gate is that the correction keeps the MS on the grid (`min_retained_valid_ratio`, MS-in-frame before vs after). RGB/MS overlap ratios are reported, never gated: the two flights routinely cover different ground (often the MS covers only the centre of the RGB), and same-field data is aligned as provided. `min_target_overlap_ratio` was retired 2026-09-20 (journal §5.7). The frame around the overlap is `coarse.overlap_margin_m` (10 m, clamped to the RGB), wide enough for real GPS-only shifts of 2–6 m.
 10. **Every real-data bug gets a regression test that reproduces it** — synthetic fixtures have clean metadata and miss things (see the journal §5.1, the ODM band-metadata `IndexError`). Prefer real AROSICS/GDAL in tests over mocks: a `MagicMock` once hid a gate that never fired (blueprint finding A1).
@@ -224,7 +223,7 @@ wins and this section is stale. Why the design ended up this way is in
 **Coarse to fine, the way AROSICS is designed to be used.**
 
 1. **Global step.** `_estimate_global_candidate` tries ORB/SIFT
-   (Green↔Green, then Red↔Red), LoFTR if enabled, AROSICS' own `COREG` as a
+   (Green↔Green, then Red↔Red), AROSICS' own `COREG` as a
    feature-free candidate, then masked phase correlation. Each candidate goes
    through classical footprint/residual QA.
    - If one passes: `VerifiedGlobalContext.is_verified = True`.

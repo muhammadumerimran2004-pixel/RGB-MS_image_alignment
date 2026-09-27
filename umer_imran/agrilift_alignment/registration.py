@@ -1,7 +1,5 @@
 import cv2
 import numpy as np
-import os
-from functools import lru_cache
 from .core import AlignmentError, Candidate, Correspondences, Space, Transform
 
 def phase_proposal(rgb_structure: np.ndarray, ms_structure: np.ndarray, mask: np.ndarray, max_shift_px: float) -> Transform:
@@ -97,107 +95,6 @@ def tiled_mim_descriptors(rgb_mim: np.ndarray, ms_mim: np.ndarray, mask: np.ndar
           all_ms.append(pms); all_rgb.append(rp[ri]+[x0,y0]); tiles.append(ty*grid+tx)
     if len(all_ms)<20: raise AlignmentError("ERR_INSUFFICIENT_MATCHES",f"Only {len(all_ms)} MIM correspondences.")
     return Correspondences(np.float32(all_ms),np.float32(all_rgb),np.asarray(tiles))
-
-@lru_cache(maxsize=1)
-def _loftr_model():
-    """Load the official pretrained matcher lazily, so classical paths stay usable."""
-    # Some Windows Python installations do not pass their current CA bundle to
-    # urllib/torch.hub. Keep certificate verification enabled while supplying it.
-    import certifi
-    os.environ.setdefault("SSL_CERT_FILE",certifi.where())
-    import torch
-    from kornia.feature import LoFTR
-    model=LoFTR(pretrained="outdoor")
-    model.eval()
-    return model
-
-def loftr_correspondences(rgb: np.ndarray, ms: np.ndarray, mask: np.ndarray, proposal: Transform, grid: int = 7,
-                          minimum_confidence: float = .50, max_dimension: int = 1024) -> Correspondences:
-    """Automatic phase-prior tiled LoFTR evidence, converted back from phase-proposal to MS coordinates.
-
-    The pretrained network is a proposal generator only. Confidence filtering,
-    valid-mask filtering, distributed RANSAC and held-out QA remain mandatory.
-    """
-    try:
-        import torch
-        model = _loftr_model()
-    except Exception as exc:
-        raise AlignmentError("ERR_LOFTR_UNAVAILABLE", f"Pretrained LoFTR unavailable: {type(exc).__name__}") from exc
-    h, w = rgb.shape
-    warped_ms = cv2.warpAffine(ms, proposal.forward[:2], (w, h), flags=cv2.INTER_LINEAR)
-    tiles = select_tiles(rgb, mask, grid=grid)
-    if not tiles:
-        raise AlignmentError("ERR_INSUFFICIENT_MATCHES", "No suitable tiles selected for LoFTR matching.")
-
-    all_ms = []
-    all_rgb = []
-    tile_ids = []
-    radius = 32
-
-    for tile_id, x0, y0, x1, y1 in tiles:
-        px0, py0 = max(0, x0 - radius), max(0, y0 - radius)
-        px1, py1 = min(w, x1 + radius), min(h, y1 + radius)
-        patch_w, patch_h = px1 - px0, py1 - py0
-        if patch_w < 16 or patch_h < 16:
-            continue
-
-        run_w = max(8, int(round(patch_w)) // 8 * 8)
-        run_h = max(8, int(round(patch_h)) // 8 * 8)
-
-        rgb_patch = cv2.resize(rgb[py0:py1, px0:px1], (run_w, run_h), interpolation=cv2.INTER_AREA)
-        ms_patch = cv2.resize(warped_ms[py0:py1, px0:px1], (run_w, run_h), interpolation=cv2.INTER_AREA)
-
-        image0 = torch.from_numpy(np.ascontiguousarray(rgb_patch)).float()[None, None] / 255.0
-        image1 = torch.from_numpy(np.ascontiguousarray(ms_patch)).float()[None, None] / 255.0
-
-        try:
-            with torch.inference_mode():
-                output = model({"image0": image0, "image1": image1})
-        except Exception as exc:
-            continue
-
-        if "keypoints0" not in output or len(output["keypoints0"]) == 0:
-            continue
-
-        kpts0 = output["keypoints0"].detach().cpu().numpy() * np.array([patch_w / run_w, patch_h / run_h], dtype=np.float32)
-        kpts1 = output["keypoints1"].detach().cpu().numpy() * np.array([patch_w / run_w, patch_h / run_h], dtype=np.float32)
-        confidence = output["confidence"].detach().cpu().numpy()
-
-        tile_candidates = []
-        for i, (a, b) in enumerate(zip(kpts0, kpts1)):
-            if confidence[i] < minimum_confidence:
-                continue
-            prgb = a + np.array([px0, py0], dtype=np.float32)
-            pwarped = b + np.array([px0, py0], dtype=np.float32)
-            ax, ay = int(round(prgb[0])), int(round(prgb[1]))
-            bx, by = int(round(pwarped[0])), int(round(pwarped[1]))
-
-            if not (0 <= ax < w and 0 <= ay < h and 0 <= bx < w and 0 <= by < h):
-                continue
-            if not (mask[ay, ax] and mask[by, bx]):
-                continue
-            if np.linalg.norm(prgb - pwarped) > radius * 2:
-                continue
-
-            tile_candidates.append((confidence[i], prgb, pwarped))
-
-        if not tile_candidates:
-            continue
-
-        tile_candidates.sort(key=lambda item: item[0], reverse=True)
-        tile_candidates = tile_candidates[:30]
-
-        for conf, prgb, pwarped in tile_candidates:
-            pms = proposal.inverse().apply(pwarped[None, :])[0]
-            all_ms.append(pms)
-            all_rgb.append(prgb)
-            tile_ids.append(tile_id)
-
-    if len(all_ms) < 20:
-        raise AlignmentError("ERR_INSUFFICIENT_MATCHES", f"Only {len(all_ms)} confident LoFTR matches across tiles.")
-
-    return Correspondences(np.float32(all_ms), np.float32(all_rgb), np.array(tile_ids, dtype=int))
-
 
 def fit_affine(c: Correspondences) -> Candidate:
     matrix, inliers=cv2.estimateAffine2D(c.ms,c.rgb,method=cv2.RANSAC,ransacReprojThreshold=2,maxIters=10000,confidence=.999)

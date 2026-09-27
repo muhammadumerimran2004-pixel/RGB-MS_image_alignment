@@ -1,7 +1,7 @@
 """AROSICS COREG_LOCAL refinement of an already-verified global result.
 
 Design (see ALIGNMENT_V4_AROSICS_TPS_BLUEPRINT.md Phase 2): the verified
-global candidate (ORB/SIFT/LoFTR/phase/AROSICS-global) is estimated first;
+global candidate (ORB/SIFT/phase/AROSICS-global) is estimated first;
 this module only ever *refines* it with a small local search, and AROSICS
 performs the warp itself (its own DESHIFTER, or an equivalent streaming GDAL
 thin-plate-spline warp for large rasters). Every acceptance gate here is

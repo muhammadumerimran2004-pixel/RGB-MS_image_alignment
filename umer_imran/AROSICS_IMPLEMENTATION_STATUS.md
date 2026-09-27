@@ -23,7 +23,7 @@ and real SciPy/rasterio/GDAL behavior (not mocks alone). See the blueprint's
 
 ## Current architecture (post-P2/P3, replaces the pre-blueprint design)
 
-The verified global result (ORB/SIFT/LoFTR/phase correlation, or AROSICS' own
+The verified global result (ORB/SIFT/phase correlation, or AROSICS' own
 COREG as a last-resort feature-free candidate) is estimated **first** and is
 always the safe fallback. AROSICS COREG_LOCAL then refines that result and
 performs the warp itself (its own DESHIFTER, or a streaming GDAL thin-plate-

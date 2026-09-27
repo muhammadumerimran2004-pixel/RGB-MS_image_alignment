@@ -120,30 +120,6 @@ class FeatureDetectionConfig(BaseModel):
     min_valid_pixels: int = Field(500, ge=16)
 
 
-class LoFTRConfig(BaseModel):
-    """Optional learned correspondence candidate.
-
-    LoFTR never publishes an alignment by itself.  Its matches enter the same
-    transform, footprint and residual validation path as classical matches.
-    """
-    enabled: bool = Field(False, description="Attempt LoFTR after classical candidates fail.")
-    representations: list[RepresentationType] = Field(
-        default_factory=lambda: [RepresentationType.NORMALIZED, RepresentationType.GABOR_ENERGY],
-        min_length=1,
-        description="Cross-spectral representations tried in order.",
-    )
-    tile_grid: int = Field(7, ge=2, le=12)
-    max_tiles: int = Field(
-        12, ge=1, le=144,
-        description="Maximum texture-ranked LoFTR tiles evaluated per candidate; bounds CPU/GPU runtime.",
-    )
-    tile_halo_px: int = Field(32, ge=0, le=256)
-    min_confidence: float = Field(0.50, ge=0.0, le=1.0)
-    max_matches_per_tile: int = Field(30, ge=1, le=200)
-    max_residual_from_prior_px: float = Field(64.0, gt=0.0, le=512.0)
-    device: str = Field("auto", pattern="^(auto|cpu|cuda)$")
-
-
 class ArosicsBandPair(BaseModel):
     """One ordered, semantically comparable reference/target band pair for AROSICS.
 
@@ -163,7 +139,7 @@ class ArosicsBandPair(BaseModel):
 class ArosicsGlobalCandidateConfig(BaseModel):
     """COREG (global): one feature-free candidate inside global estimation.
 
-    This is tried only if every feature-based candidate (ORB/SIFT/LoFTR) is
+    This is tried only if every feature-based candidate (ORB/SIFT) is
     rejected. Like those, its candidate undergoes footprint and residual
     validation before publication - it is never trusted on its own.
     """
@@ -276,7 +252,7 @@ class ArosicsLocalConfig(BaseModel):
 class ArosicsConfig(BaseModel):
     """Optional AROSICS geospatial co-registration.
 
-    The verified global result (ORB/SIFT/LoFTR/phase, or AROSICS' own global
+    The verified global result (ORB/SIFT/phase, or AROSICS' own global
     COREG as a last resort - see ``global_candidate``) is estimated first.
     AROSICS' local COREG_LOCAL then refines that result and performs the
     warp itself, subject to the gates in ``local``. This mirrors AROSICS'
@@ -727,7 +703,6 @@ class AlignmentConfig(BaseModel):
     )
     coarse: CoarseAlignmentConfig = Field(default_factory=CoarseAlignmentConfig)
     features: FeatureDetectionConfig = Field(default_factory=FeatureDetectionConfig)
-    loftr: LoFTRConfig = Field(default_factory=LoFTRConfig)
     arosics: ArosicsConfig = Field(default_factory=ArosicsConfig)
     transform: TransformValidationConfig = Field(default_factory=TransformValidationConfig)
     manual: ManualAlignmentConfig = Field(default_factory=ManualAlignmentConfig)

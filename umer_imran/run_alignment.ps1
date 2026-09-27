@@ -15,9 +15,8 @@ Write-Host ""
 Write-Host "Choose alignment mode:"
 Write-Host "  [1] Manual control points"
 Write-Host "  [2] Standard automated alignment (ORB/SIFT, then phase fallback)"
-Write-Host "  [3] LoFTR-assisted automated alignment"
-Write-Host "  [4] Feature-agnostic local cell correlation (safe global fallback)"
-$choice = Read-Host "Enter 1, 2, 3, or 4"
+Write-Host "  [3] Feature-agnostic local cell correlation (safe global fallback)"
+$choice = Read-Host "Enter 1, 2, or 3"
 
 switch ($choice) {
     "1" {
@@ -36,21 +35,12 @@ switch ($choice) {
     "3" {
         python -m drone_alignment $rgbPath $msPath `
             --output-dir $outputDir `
-            --mode automated `
-            --resolution ms `
-            --enable-loftr `
-            --loftr-max-tiles 4 `
-            --verbose
-    }
-    "4" {
-        python -m drone_alignment $rgbPath $msPath `
-            --output-dir $outputDir `
             --mode local-correlation `
             --resolution ms `
             --verbose
     }
     default {
-        Write-Error "Invalid choice. Run the launcher again and enter 1, 2, 3, or 4."
+        Write-Error "Invalid choice. Run the launcher again and enter 1, 2, or 3."
         exit 1
     }
 }
