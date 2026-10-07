@@ -11,6 +11,7 @@ means the caller safely publishes the global result instead.
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 import logging
 import math
@@ -18,7 +19,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import rasterio
@@ -42,6 +43,103 @@ from drone_alignment.io.reader import RasterMetadata
 from drone_alignment.quality.metrics import FootprintMetrics, SpatialResidualReport, footprint_gate_failures
 
 logger = logging.getLogger("drone_alignment")
+
+
+# ---------------------------------------------------------------------------
+# RAM-aware worker throttle + process priority helpers
+# ---------------------------------------------------------------------------
+
+def _compute_safe_cpus(staged_width: int, staged_height: int, configured_cpus: int | None) -> int:
+    """Return a CPU count that keeps AROSICS' loky workers within available RAM.
+
+    COREG_LOCAL hands both the reference and target arrays (float32) to every
+    loky worker process.  On a memory-constrained machine the OS silently kills
+    the process before Python even gets a MemoryError.  Here we measure free
+    RAM, compute how many workers fit, and throttle down rather than crash.
+    If psutil is unavailable we fall back to ``configured_cpus`` (which itself
+    defaults to None, letting AROSICS use all cores — the pre-existing
+    behaviour).
+    """
+    try:
+        import psutil
+        available_bytes = psutil.virtual_memory().available
+    except Exception:  # noqa: BLE001 - psutil unavailable or query failed
+        return configured_cpus or os.cpu_count() or 4
+
+    # Two float32 bands per worker; add headroom for AROSICS' own internal
+    # buffers (grid, intermediate arrays, GeoArray overhead). Keep part of the
+    # currently available RAM untouched because the parent process, GDAL, and
+    # unrelated services can allocate more memory after this snapshot.
+    band_bytes = staged_width * staged_height * 4  # float32
+    per_worker_bytes = band_bytes * 2 * 1.35
+    if per_worker_bytes <= 0:
+        return configured_cpus or 1
+
+    reserve_bytes = max(512 * 1024**2, int(available_bytes * 0.20))
+    worker_budget = max(0, available_bytes - reserve_bytes)
+    if per_worker_bytes > worker_budget:
+        raise LocalRefinementRejected(
+            "MEMORY_BUDGET",
+            "Available RAM is insufficient for even one AROSICS local worker "
+            f"({available_bytes / 1e9:.1f} GB free; approximately "
+            f"{per_worker_bytes / 1e9:.1f} GB required plus reserve).",
+            {
+                "available_gb": available_bytes / 1e9,
+                "reserved_gb": reserve_bytes / 1e9,
+                "estimated_per_worker_gb": per_worker_bytes / 1e9,
+            },
+        )
+
+    safe = max(1, int(worker_budget // per_worker_bytes))
+    logical = os.cpu_count() or 4
+    ceiling = configured_cpus if configured_cpus is not None else logical
+    effective = min(safe, ceiling)
+
+    if effective < ceiling:
+        logger.warning(
+            "AROSICS COREG_LOCAL: capping workers %d -> %d to stay within available RAM "
+            "(%.1f GB free, %.1f GB per worker). Run will be slower but won't be killed.",
+            ceiling, effective,
+            available_bytes / 1e9, per_worker_bytes / 1e9,
+        )
+    return effective
+
+
+@contextlib.contextmanager
+def _boosted_priority():
+    """Temporarily raise this process to HIGH priority on Windows (no-op elsewhere).
+
+    When AROSICS loads full bands across multiple loky workers the OS memory
+    manager may kill the process before it finishes.  Running at HIGH priority
+    makes Windows defer page-outs to other, lower-priority processes first,
+    buying time to complete the warp even under memory pressure.
+
+    Priority is restored to its original value on exit regardless of outcome.
+    Failures (psutil absent, permission denied) are silently ignored so this
+    never breaks an otherwise-working run.
+    """
+    try:
+        import psutil
+        proc = psutil.Process()
+        original = proc.nice()
+        try:
+            # HIGH_PRIORITY_CLASS is Windows-only; on POSIX psutil uses -10..
+            high = getattr(psutil, "HIGH_PRIORITY_CLASS", -10)
+            proc.nice(high)
+            logger.debug("Process priority raised to HIGH for AROSICS COREG_LOCAL.")
+        except (PermissionError, psutil.AccessDenied):
+            logger.debug("Could not raise process priority (no permission); continuing at normal priority.")
+            original = None
+        yield
+    except Exception:  # noqa: BLE001 - psutil missing or any other issue
+        yield
+        return
+    finally:
+        try:
+            if original is not None:
+                proc.nice(original)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +449,7 @@ _RESAMPLING_GDAL = {"nearest": "NEAR", "bilinear": "BILINEAR", "cubic": "CUBIC"}
 
 def _warp_with_gdal_tps(
     target_full_alias: Path, gcps, crs_wkt: str, output_profile: dict, resampling: str, nodata_value: float,
-    memory_mb: int, safe_output: Path,
+    memory_mb: int, cpus: int, safe_output: Path,
 ) -> None:
     from osgeo import gdal
     gdal.UseExceptions()
@@ -370,8 +468,8 @@ def _warp_with_gdal_tps(
             str(safe_output), src, format="GTiff", tps=True,
             outputBounds=bounds, xRes=gsd_x, yRes=gsd_y,
             resampleAlg=_RESAMPLING_GDAL.get(resampling, "BILINEAR"), dstNodata=nodata_value,
-            warpMemoryLimit=memory_mb * 1024 * 1024, multithread=True,
-            warpOptions=["NUM_THREADS=ALL_CPUS"],
+            warpMemoryLimit=memory_mb * 1024 * 1024, multithread=cpus > 1,
+            warpOptions=[f"NUM_THREADS={cpus}"],
             creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"],
         )
         if result is None:
@@ -480,6 +578,7 @@ def _attempt_band_pair(
     cfg: AlignmentConfig,
     output_dir: Path,
     active_log: logging.Logger,
+    progress: Callable[[int, str], None] | None = None,
 ) -> ArosicsLocalPublication:
     local_cfg = cfg.arosics.local
 
@@ -497,6 +596,8 @@ def _attempt_band_pair(
             stage_reference_band(rgb_meta, ref_band, staged_ref_path)
             correction = compute_global_map_correction(registration_transform, global_transform.matrix, ms_meta.transform)
             staged_tgt = stage_precorrected_target_band(ms_meta, tgt_band, correction, staged_tgt_path)
+            if progress:
+                progress(52, f"staged AROSICS band pair {pair_name}")
         except ArosicsExecutionError:
             raise  # operational error - propagate, do not silently fall back
 
@@ -507,6 +608,7 @@ def _attempt_band_pair(
             staged_width, staged_height = staged_tgt_ds.width, staged_tgt_ds.height
         grid_res_px = _resolve_grid_res_px(local_cfg, staged_width, staged_height)
 
+        safe_cpus = _compute_safe_cpus(staged_width, staged_height, local_cfg.cpus)
         try:
             coreg_local = COREG_LOCAL(
                 im_ref=str(staged_ref_path), im_tgt=str(staged_tgt_path),
@@ -517,7 +619,7 @@ def _attempt_band_pair(
                 rs_max_outlier=local_cfg.rs_max_outlier, rs_tolerance=local_cfg.rs_tolerance, rs_random_state=0,
                 align_grids=False, resamp_alg_calc="cubic",
                 outFillVal=int(_AROSICS_OUTFILL_VAL), nodata=(STAGE_NODATA, STAGE_NODATA),
-                projectDir=str(temp_path), CPUs=local_cfg.cpus, progress=False, q=True, ignore_errors=True,
+                projectDir=str(temp_path), CPUs=safe_cpus, progress=False, q=True, ignore_errors=True,
             )
         except RuntimeError as exc:
             # COREG_LOCAL's constructor test-matches one window at the overlap centre and
@@ -532,7 +634,10 @@ def _attempt_band_pair(
         except Exception as exc:  # noqa: BLE001 - AROSICS may raise a range of internal errors
             raise ArosicsExecutionError(f"AROSICS COREG_LOCAL setup error: {exc}") from exc
         try:
-            coreg_local.calculate_spatial_shifts()
+            with _boosted_priority():
+                coreg_local.calculate_spatial_shifts()
+            if progress:
+                progress(66, "generated local tie points")
         except Exception as exc:  # noqa: BLE001 - AROSICS may raise a range of internal errors
             raise ArosicsExecutionError(f"AROSICS COREG_LOCAL execution error: {exc}") from exc
 
@@ -581,6 +686,8 @@ def _attempt_band_pair(
             )
         tie_point_summary["fit"] = len(fit_points)
         tie_point_summary["holdout"] = len(holdout_points)
+        if progress:
+            progress(72, "validated tie-point coverage")
 
         before_px = [p.shift_px for p in holdout_points]
         if float(np.median(before_px)) < local_cfg.no_gain_floor_px:
@@ -611,12 +718,12 @@ def _attempt_band_pair(
                 coreg_info = dict(coreg_local.coreg_info)
                 _warp_with_deshifter(
                     target_full_alias, coreg_info, gcps, output_profile, local_cfg.resampling,
-                    cfg.warp.nodata_value, local_cfg.cpus, safe_output,
+                    cfg.warp.nodata_value, safe_cpus, safe_output,
                 )
             else:
                 _warp_with_gdal_tps(
                     target_full_alias, gcps, rgb_meta.crs.to_wkt(), output_profile, local_cfg.resampling,
-                    cfg.warp.nodata_value, local_cfg.gdal_warp_memory_mb, safe_output,
+                    cfg.warp.nodata_value, local_cfg.gdal_warp_memory_mb, safe_cpus, safe_output,
                 )
         except ArosicsExecutionError:
             raise
@@ -630,6 +737,8 @@ def _attempt_band_pair(
                 written.width == output_width and written.height == output_height
                 and _affine_close(written.transform, output_profile["transform"])
             )
+        if progress:
+            progress(82, f"completed {engine} warp")
         if not grid_ok:
             raise ArosicsExecutionError(
                 f"AROSICS local warp ({engine}) output grid does not match the pipeline output grid."
@@ -654,6 +763,8 @@ def _attempt_band_pair(
             local_cfg.window_size, max_shift_ref_px, ms_meta.gsd,
         )
         holdout_stats = _run_holdout_gates(before_px, after_px, local_cfg)
+        if progress:
+            progress(89, "passed independent holdout checks")
 
         verification_info = None
         if local_cfg.full_grid_verification:
@@ -666,9 +777,10 @@ def _attempt_band_pair(
                     min_reliability=local_cfg.min_reliability, rs_random_state=0,
                     align_grids=False, resamp_alg_calc="cubic",
                     outFillVal=int(_AROSICS_OUTFILL_VAL), nodata=(STAGE_NODATA, STAGE_NODATA),
-                    projectDir=str(temp_path), CPUs=local_cfg.cpus, progress=False, q=True, ignore_errors=True,
+                    projectDir=str(temp_path), CPUs=safe_cpus, progress=False, q=True, ignore_errors=True,
                 )
-                verify_coreg.calculate_spatial_shifts()
+                with _boosted_priority():
+                    verify_coreg.calculate_spatial_shifts()
                 verify_table = verify_coreg.CoRegPoints_table
                 verify_points = _extract_tie_points(verify_table, Affine.identity(), ms_meta.gsd) if verify_table is not None else []
                 verify_valid = [p for p in verify_points if not p.is_outlier]
@@ -693,6 +805,8 @@ def _attempt_band_pair(
             except Exception as exc:  # noqa: BLE001 - verification itself failing is not fatal to the primary result
                 active_log.warning("AROSICS full-grid verification could not be completed: %s", exc)
                 verification_info = {"error": str(exc)}
+        if progress:
+            progress(94, "completed post-warp verification")
 
         # --- footprint ---
         try:
@@ -705,6 +819,8 @@ def _attempt_band_pair(
                 "FOOTPRINT_FAILED", "Written footprint rejected: " + "; ".join(footprint_failures),
                 {"footprint": footprint.__dict__},
             )
+        if progress:
+            progress(97, "passed output footprint checks")
 
         # --- publish ---
         stem = ms_meta.path.stem
@@ -712,6 +828,8 @@ def _attempt_band_pair(
         staged_partial = output_dir / f".{stem}_aligned.arosics_local.partial.tif"
         shutil.copy2(safe_output, staged_partial)
         os.replace(staged_partial, final_path)
+        if progress:
+            progress(98, "published aligned raster")
 
         tie_points_geojson_path = None
         if local_cfg.export_tie_points:
@@ -733,6 +851,7 @@ def _attempt_band_pair(
                 "grid_res_px": grid_res_px, "window_size": list(local_cfg.window_size),
                 "max_shift_ref_px": max_shift_ref_px, "max_shift": max_shift_info,
                 "min_reliability": local_cfg.min_reliability, "tie_point_filter_level": local_cfg.tie_point_filter_level,
+                "effective_cpus": safe_cpus,
             },
             "tie_points": tie_point_summary,
             "coverage": coverage_info,
@@ -781,6 +900,7 @@ def run_arosics_local_refinement(
     cfg: AlignmentConfig,
     output_dir: Path,
     active_log: logging.Logger | None = None,
+    progress: Callable[[int, str], None] | None = None,
 ) -> ArosicsLocalPublication:
     """Refine the verified global result with AROSICS COREG_LOCAL, or reject.
 
@@ -810,7 +930,7 @@ def run_arosics_local_refinement(
             publication = _attempt_band_pair(
                 rgb_meta, ms_meta, common_mask, registration_transform, registration_gsd,
                 global_transform, global_quality, output_profile, pair_name, ref_band, tgt_band,
-                cfg, output_dir, active_log,
+                cfg, output_dir, active_log, progress,
             )
             publication.payload["band_pair_attempts"] = attempts + [{"name": pair_name, "result": "accepted"}]
             return publication

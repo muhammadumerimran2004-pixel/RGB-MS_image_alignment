@@ -12,6 +12,7 @@ from drone_alignment.alignment.arosics_local import (
     TiePoint,
     _affine_close,
     _coverage_metrics,
+    _compute_safe_cpus,
     _estimate_warp_memory_gb,
     _extract_tie_points,
     _neighbour_filter,
@@ -346,6 +347,22 @@ def test_estimate_warp_memory_gb_scales_with_size_and_band_count():
     small = _fake_ms_meta(100, 100, band_count=1)
     large = _fake_ms_meta(1000, 1000, band_count=5)
     assert _estimate_warp_memory_gb(large, 1000, 1000) > _estimate_warp_memory_gb(small, 100, 100)
+
+
+def test_safe_cpu_count_never_exceeds_configured_limit():
+    assert 1 <= _compute_safe_cpus(100, 100, configured_cpus=2) <= 2
+
+
+def test_safe_cpu_count_rejects_when_one_worker_cannot_fit(monkeypatch):
+    import psutil
+
+    class Memory:
+        available = 600 * 1024**2
+
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: Memory())
+    with pytest.raises(LocalRefinementRejected) as excinfo:
+        _compute_safe_cpus(10_000, 10_000, configured_cpus=4)
+    assert excinfo.value.reason_code == "MEMORY_BUDGET"
 
 
 # ---------------------------------------------------------------------------

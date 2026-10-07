@@ -1,0 +1,16 @@
+# Minimal pyproject.toml used ONLY inside the Docker image.
+# It installs drone_alignment as the sole package so
+# `python -m drone_alignment` works correctly.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agrilift-docker"
+version = "1.0.0"
+description = "AgriLift Drone Alignment – Docker build"
+requires-python = ">=3.11"
+dependencies = []   # already installed in the base layer
+
+[tool.setuptools.packages.find]
+include = ["drone_alignment*"]

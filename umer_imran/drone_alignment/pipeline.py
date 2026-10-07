@@ -45,6 +45,7 @@ from drone_alignment.quality.metrics import (
 )
 from drone_alignment.quality.visualization import generate_alignment_preview
 from drone_alignment.quality.report import write_alignment_report
+from drone_alignment.progress import ProgressReporter
 
 logger = logging.getLogger("drone_alignment")
 
@@ -494,15 +495,21 @@ def align_orthomosaics(
     recorded - there is genuinely no safe result to publish.
     """
     active_log = log or logger
+    progress = ProgressReporter(active_log)
+    progress.update(0, "starting alignment")
     cfg = config or AlignmentConfig()
     output_dir_obj = Path(output_dir).resolve()
     output_dir_obj.mkdir(parents=True, exist_ok=True)
+    progress.update(3, "validated run configuration")
     context = _estimate_verified_global_context(rgb_path, ms_path, cfg, active_log)
+    progress.update(45, "selected global alignment candidate")
     requested_mode = AlignmentMode.AUTOMATED.value
 
     if cfg.arosics.enabled and cfg.arosics.local.enabled:
         try:
-            return _refine_with_arosics_local(context, output_dir_obj, cfg, active_log, requested_mode)
+            return _refine_with_arosics_local(
+                context, output_dir_obj, cfg, active_log, requested_mode,
+            )
         except LocalRefinementRejected as rejection:
             if not context.is_verified:
                 raise TransformUnreliableError(
@@ -513,7 +520,8 @@ def align_orthomosaics(
             active_log.warning(
                 "AROSICS local refinement rejected (%s): %s", rejection.reason_code, rejection,
             )
-            return _publish_global_context(
+            progress.update(75, "local refinement rejected; publishing verified global result")
+            result = _publish_global_context(
                 context, output_dir_obj, cfg, active_log,
                 requested_alignment_mode=requested_mode, applied_alignment_mode="automated_global",
                 fallback={
@@ -521,16 +529,21 @@ def align_orthomosaics(
                     "message": str(rejection), "details": rejection.details,
                 },
             )
+            progress.update(100, "alignment complete")
+            return result
 
     if not context.is_verified:
         raise TransformUnreliableError(
             "No verified alignment candidate, and AROSICS local refinement is disabled or unavailable to "
             "attempt a best-effort recovery. " + " | ".join(context.rejected_candidates)
         )
-    return _publish_global_context(
+    progress.update(55, "publishing verified global result")
+    result = _publish_global_context(
         context, output_dir_obj, cfg, active_log,
         requested_alignment_mode=requested_mode, applied_alignment_mode="automated_global",
     )
+    progress.update(100, "alignment complete")
+    return result
 
 
 def _preview_reference_band(context: VerifiedGlobalContext, cfg: AlignmentConfig, band_pair_name: str) -> np.ndarray:
@@ -550,13 +563,15 @@ def _refine_with_arosics_local(
     requested_mode: str,
 ) -> AlignmentResult:
     """Delegate the refinement to alignment.arosics_local, then publish exactly like every other mode."""
+    progress = ProgressReporter(active_log)
+    progress.update(45, "selected global alignment candidate")
     common_mask = context.coarse.rgb_valid_mask & context.coarse.ms_valid_mask
     output_profile = context.coarse.output_profile or context.coarse.target_profile
     publication = run_arosics_local_refinement(
         context.rgb_meta, context.ms_meta, common_mask,
         context.coarse.registration_transform, context.coarse.registration_gsd,
         context.registration_transform, context.quality_report, output_profile,
-        cfg, output_dir_obj, active_log,
+        cfg, output_dir_obj, active_log, progress.update,
     )
     stem = context.ms_meta.path.stem
     preview_path = output_dir_obj / f"{stem}_alignment_preview.png"
@@ -570,6 +585,7 @@ def _refine_with_arosics_local(
         reference_band, warped_band, preview_path,
         rgb_mask=context.coarse.rgb_valid_mask, max_dimension=cfg.quality.preview_max_dimension,
     )
+    progress.update(99, "generated QA preview")
     report_path = output_dir_obj / f"{stem}_alignment_report.json"
     fallback = None
     if not context.is_verified:
@@ -606,6 +622,7 @@ def _refine_with_arosics_local(
         local_refinement=payload, fallback=fallback,
     )
     active_log.info("AROSICS local refinement published using band pair %s.", publication.band_pair_name)
+    progress.update(100, "alignment complete")
     return AlignmentResult(
         publication.aligned_path, report_path, preview_path, published_quality, context.registration_transform,
     )

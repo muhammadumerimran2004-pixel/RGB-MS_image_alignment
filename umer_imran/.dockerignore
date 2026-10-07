@@ -1,0 +1,52 @@
+# Docker build artifacts
+.test-*
+.pytest_cache/
+.pytest_tmp/
+.coverage
+.coverage.*
+htmlcov/
+__pycache__/
+*.py[cod]
+*$py.class
+agrilift.egg-info/
+
+# Large data / results — never bake into the image
+Stuff/
+Results/
+TEST_RESULTS_TO_SHARE/
+DOCUMENTATION RESULTS/
+WP7_LOCAL_CORRELATION_RESULT/
+WP7_LOCAL_CORRELATION_EXPLORATORY_RESULT/
+*.tif
+*.tiff
+*.partial.tif
+*.aux.xml
+*.tfw
+
+# IDE / system
+.vscode/
+.idea/
+.claude/
+.agents/
+.git/
+.env
+.env.local
+.env.*.local
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentation-only files (shrink image)
+docs/
+interns-2026/
+*.md
+
+# Scripts not needed in container
+scripts/
+run_alignment.ps1
+run_commands.txt
+
+# Modules not needed for Drone Alignment
+crop_health_sentinel/
+agrilift_alignment/
