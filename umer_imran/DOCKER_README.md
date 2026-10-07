@@ -101,11 +101,26 @@ The dependency layer is cached — only code changes trigger a fast (~10 s) rebu
 
 ---
 
+## Memory & RAM Requirements (AROSICS Subpixel Alignment)
+
+AROSICS `COREG_LOCAL` uses parallel worker processes (`loky`) where each worker requires access to both reference and target float32 image rasters. 
+
+> [!WARNING]
+> **Container Crash / Exit Code 137:**
+> If your container terminates abruptly with **exit code 137** (or silent worker process failure), it means Docker ran out of memory (**OOMKilled**).
+> - Allocate at least **8 GB – 16 GB** of memory to Docker Desktop:
+>   *Docker Desktop → Settings → Resources → Advanced → Memory slider (set to >= 8 GB)*
+> - Or pass memory flags: `docker run --memory="12g" --memory-swap="16g" ...`
+> - If memory is constrained, you can disable local refinement with `--no-arosics-local` to run fast global-only alignment.
+
+---
+
 ## Troubleshooting
 
 | Problem                                    | Fix                                                                                               |
 |--------------------------------------------|---------------------------------------------------------------------------------------------------|
 | `docker: command not found`                | Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and restart your shell. |
+| Container exits with code 137 / crashes     | **Insufficient RAM**. Increase Docker Desktop memory allocation in Settings → Resources.          |
 | `Error response from daemon: drive not shared` | Open Docker Desktop → Settings → Resources → File Sharing → add the drive letter.             |
 | `GDAL ERROR 4: … No such file or directory` | Check that your `-v` mount path is correct and the file exists on the host.                     |
 | Build fails on `libgdal-dev`               | Make sure Docker Desktop is set to **Linux containers** (right-click tray icon → Switch…).       |

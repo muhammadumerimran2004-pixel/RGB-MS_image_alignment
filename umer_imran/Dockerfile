@@ -33,7 +33,9 @@ RUN pip install --no-cache-dir \
         "click>=8.1,<9" \
         "opencv-python-headless>=4.10,<5" \
         "scipy>=1.11,<2" \
-        "scikit-image>=0.21,<1"
+        "scikit-image>=0.21,<1" \
+        "psutil>=5.9,<7" \
+        "arosics>=1.13,<2"
 
 # ---------- application layer ------------------------------------------------
 # drone_alignment is self-contained — no cross-module imports.
