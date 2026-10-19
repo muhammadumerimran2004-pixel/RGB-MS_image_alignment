@@ -101,6 +101,25 @@ The dependency layer is cached — only code changes trigger a fast (~10 s) rebu
 
 ---
 
+## Sentinel-2 patch (optional)
+
+Add `--sentinel` to also fetch the matching Sentinel-2 patch and register it to the aligned stack. This is the only
+feature that needs **internet access from the container** (public Earth Search / Planetary Computer catalogues, no
+account). It never fails the alignment: a Sentinel problem prints a warning and the exit code stays 0, unless you add
+`--sentinel-strict` (exit code 3).
+
+```
+docker run --rm -v C:\data:/data agrilift-align /data/rgb.tif /data/ms.tif -o /data/results -m automated \
+    --sentinel --flight-date 2026-10-10
+```
+
+Inside Docker there is no keyboard prompt, so give the date with `--flight-date`, put a `flight.json`
+(`{"flight_date": "2026-10-10"}`) next to the RGB file, or mount the raw photos and pass `--images-dir`. A date guessed
+from folder names is only used unattended if `accept_path_date_estimate: true` is set in a `--sentinel-config` file
+and the guess is unambiguous. Results go to `<output>/sentinel/`.
+
+---
+
 ## Memory & RAM Requirements (AROSICS Subpixel Alignment)
 
 AROSICS `COREG_LOCAL` uses parallel worker processes (`loky`) where each worker requires access to both reference and target float32 image rasters. 

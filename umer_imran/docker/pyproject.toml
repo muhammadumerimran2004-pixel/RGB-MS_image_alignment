@@ -13,4 +13,7 @@ requires-python = ">=3.11"
 dependencies = []   # already installed in the base layer
 
 [tool.setuptools.packages.find]
-include = ["drone_alignment*"]
+include = ["drone_alignment*", "sentinel_patch*"]
+
+[tool.setuptools.package-data]
+"sentinel_patch.config" = ["*.yaml"]

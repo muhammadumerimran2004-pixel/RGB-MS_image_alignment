@@ -35,11 +35,14 @@ RUN pip install --no-cache-dir \
         "scipy>=1.11,<2" \
         "scikit-image>=0.21,<1" \
         "psutil>=5.9,<7" \
+        "requests>=2.31,<3" \
         "arosics>=1.13,<2"
 
 # ---------- application layer ------------------------------------------------
 # drone_alignment is self-contained — no cross-module imports.
 COPY drone_alignment/    drone_alignment/
+# Optional Sentinel-2 patch stage (--sentinel); it needs internet access only when it runs.
+COPY sentinel_patch/     sentinel_patch/
 
 # Use a Docker-specific pyproject that only discovers drone_alignment,
 # avoiding errors from missing agrilift_alignment / crop_health_sentinel.

@@ -35,32 +35,46 @@ if ([string]::IsNullOrWhiteSpace($choice)) {
     $choice = "3"
 }
 
+$sentinelArgs = @()
+$wantSentinel = Read-Host "Also fetch & align the matching Sentinel-2 patch? Needs internet. [y/N]"
+if ($wantSentinel -match '^(y|yes)$') {
+    $sentinelArgs += '--sentinel'
+    $flightDate = Read-Host "Flight date YYYY-MM-DD (press Enter to detect it from photos / folder names)"
+    if (-not [string]::IsNullOrWhiteSpace($flightDate)) {
+        $sentinelArgs += @('--flight-date', $flightDate.Trim())
+    }
+}
+
 switch ($choice) {
     "1" {
         python -m drone_alignment $rgbPath $msPath `
             --output-dir $outputDir `
             --mode manual `
-            --resolution ms
+            --resolution ms `
+            @sentinelArgs
     }
     "2" {
         python -m drone_alignment $rgbPath $msPath `
             --output-dir $outputDir `
             --mode automated `
             --resolution ms `
-            --no-arosics-local
+            --no-arosics-local `
+            @sentinelArgs
     }
     "3" {
         python -m drone_alignment $rgbPath $msPath `
             --output-dir $outputDir `
             --mode automated `
             --resolution ms `
-            --arosics-local
+            --arosics-local `
+            @sentinelArgs
     }
     "4" {
         python -m drone_alignment $rgbPath $msPath `
             --output-dir $outputDir `
             --mode local-correlation `
-            --resolution ms
+            --resolution ms `
+            @sentinelArgs
     }
     default {
         Write-Error "Invalid choice. Run the launcher again and enter 1, 2, 3, or 4."

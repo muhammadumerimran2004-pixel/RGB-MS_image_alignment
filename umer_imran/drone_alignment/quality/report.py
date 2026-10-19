@@ -1,4 +1,5 @@
 from dataclasses import asdict
+import os
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -8,6 +9,19 @@ from drone_alignment.config.schema import AlignmentConfig
 from drone_alignment.io.reader import RasterMetadata
 from drone_alignment.alignment.transform_estimator import TransformResult
 from drone_alignment.quality.metrics import SpatialResidualReport, FootprintMetrics
+
+
+def update_report_json(report_path: Path, key: str, value: dict) -> Path:
+    """Add or replace one top-level block of an existing alignment report (atomic: a reader never sees half a file)."""
+    report_path = Path(report_path)
+    with open(report_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data[key] = value
+    partial = report_path.with_name(f".{report_path.name}.partial")
+    with open(partial, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(partial, report_path)
+    return report_path
 
 
 def write_alignment_report(

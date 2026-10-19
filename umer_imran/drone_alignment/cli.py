@@ -1,5 +1,7 @@
 import json
 import logging
+import sys
+from datetime import date
 from pathlib import Path
 import click
 import rasterio
@@ -8,6 +10,7 @@ import yaml
 from drone_alignment.config.schema import (
     AlignmentConfig, AlignmentMode, ResolutionMode, DetectorType, ManualCoordinateMode, ArosicsBandPair,
 )
+from drone_alignment.quality.report import update_report_json
 from drone_alignment.io.gcp_io import read_gcp_csv, read_qgis_points
 from drone_alignment.pipeline import (
     align_orthomosaics, local_correlation_align_orthomosaics, local_mesh_align_orthomosaics,
@@ -129,6 +132,27 @@ from drone_alignment.pipeline import (
     help="Manual mode pixel convention for pixel-unit control points (default: 'center').",
 )
 @click.option(
+    "--sentinel/--no-sentinel", "sentinel", default=False,
+    help="After alignment, fetch the matching Sentinel-2 patch and register it to the aligned stack. "
+         "Needs internet. A Sentinel problem never fails the alignment (see --sentinel-strict).",
+)
+@click.option("--flight-date", default=None, metavar="YYYY-MM-DD",
+              help="Date of the drone flight (used by --sentinel). If omitted: flight.json next to the RGB file, "
+                   "raw photo timestamps (--images-dir), then a date found in the folder names (asks to confirm).")
+@click.option("--images-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+              help="Folder of the raw drone photos. Only EXIF/XMP headers are read (flight date, RTK evidence).")
+@click.option("--odm-project", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+              help="ODM project folder: its images/ folder is used like --images-dir, gcp_list.txt marks GCP use.")
+@click.option("--drone-positioning", type=click.Choice(["rtk", "ppk", "gcp", "gnss_only", "unknown"]), default=None,
+              help="How the drone positions were obtained; overrides detection. Only affects a warning on large shifts.")
+@click.option("--sentinel-config", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
+              help="YAML configuration for the Sentinel stage (defaults are packaged).")
+@click.option("--sentinel-ms-bands", default=None, metavar="NAME=N,...",
+              help="Band numbers in the MS file, 1-indexed. Default: red=1,green=2,nir=3 "
+                   "(the company's 3-band MS orthophotos). Only nir and red are needed.")
+@click.option("--sentinel-strict", is_flag=True,
+              help="Exit with code 3 if the Sentinel patch is not produced and verified (default: warn only, exit 0).")
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -154,6 +178,14 @@ def main(
     gcp_source_units: str,
     manual_model: str | None,
     pixel_convention: str | None,
+    sentinel: bool,
+    flight_date: str | None,
+    images_dir: Path | None,
+    odm_project: Path | None,
+    drone_positioning: str | None,
+    sentinel_config: Path | None,
+    sentinel_ms_bands: str | None,
+    sentinel_strict: bool,
     verbose: bool,
 ):
     """
@@ -173,6 +205,16 @@ def main(
     logging.getLogger("rasterio").setLevel(logging.ERROR)
 
     out_dir = output_dir if output_dir is not None else ms_path.parent / "aligned"
+
+    parsed_flight_date = None
+    if flight_date is not None:
+        try:
+            parsed_flight_date = date.fromisoformat(flight_date)
+        except ValueError as exc:
+            raise click.BadParameter("use the form YYYY-MM-DD", param_hint="--flight-date") from exc
+    if not sentinel and (flight_date or images_dir or odm_project or drone_positioning or sentinel_config
+                         or sentinel_ms_bands or sentinel_strict):
+        click.echo("[WARN] Sentinel options were given without --sentinel; they are ignored.", err=True)
 
     if config is not None:
         with open(config, "r", encoding="utf-8") as f:
@@ -402,6 +444,29 @@ def main(
     except Exception as e:
         click.echo(f"\n[ERROR] Alignment failed: {e}", err=True)
         raise click.Abort()
+
+    if sentinel:
+        # Imported here so installations without the sentinel_patch package keep working.
+        from sentinel_patch.cli_stage import DEFAULT_MS_BANDS, StageOptions, run_stage
+
+        outcome = run_stage(
+            aligned_ms_path=result.aligned_ms_path, rgb_path=rgb_path, ms_path=ms_path, out_dir=out_dir,
+            options=StageOptions(
+                flight_date=parsed_flight_date, images_dir=images_dir, odm_project=odm_project,
+                config_path=sentinel_config, positioning=drone_positioning,
+                ms_bands=sentinel_ms_bands or DEFAULT_MS_BANDS, strict=sentinel_strict,
+                interactive=sys.stdin.isatty(),
+            ),
+            echo=click.echo, prompt=lambda question: click.prompt(question, default="", show_default=False),
+            verbose=verbose,
+        )
+        try:
+            update_report_json(result.report_json_path, "sentinel_patch", outcome.report_block)
+        except (OSError, ValueError) as exc:
+            click.echo(f"[WARN] Could not add the Sentinel summary to the alignment report: {exc}", err=True)
+        if outcome.strict_failure:
+            click.echo("[ERROR] --sentinel-strict: the Sentinel-2 patch was not produced and verified.", err=True)
+            sys.exit(3)
 
 
 if __name__ == "__main__":

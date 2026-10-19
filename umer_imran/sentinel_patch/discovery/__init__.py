@@ -1,0 +1,1 @@
+"""Scene discovery and selection."""

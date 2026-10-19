@@ -22,6 +22,7 @@ dependencies = [
   "scipy>=1.11,<2",
   "scikit-image>=0.21,<1",
   "psutil>=5.9,<7",
+  "requests>=2.31,<3",
 ]
 
 [project.optional-dependencies]
@@ -29,12 +30,14 @@ test = ["pytest>=8,<10", "pytest-cov>=6,<8"]
 arosics = ["arosics>=1.13,<2"]
 
 [tool.setuptools.packages.find]
-include = ["agrilift_alignment*", "drone_alignment*", "crop_health_sentinel*"]
+include = ["agrilift_alignment*", "drone_alignment*", "crop_health_sentinel*", "sentinel_patch*"]
 
 [tool.setuptools.package-data]
 "crop_health_sentinel.config" = ["*.yaml"]
+"sentinel_patch.config" = ["*.yaml"]
 
 [tool.pytest.ini_options]
-testpaths = ["drone_alignment/tests", "agrilift_alignment/tests", "crop_health_sentinel/tests"]
-addopts = "-ra"
+testpaths = ["drone_alignment/tests", "agrilift_alignment/tests", "crop_health_sentinel/tests", "sentinel_patch/tests"]
+addopts = "-ra -m 'not network'"
+markers = ["network: manual checks against the live free catalogues (deselected by default)"]
 cache_dir = ".test-pytest-cache"

@@ -68,7 +68,25 @@ param(
     [string]$ManualModel,
 
     [ValidateSet('corner', 'center')]
-    [string]$PixelConvention
+    [string]$PixelConvention,
+
+    # Sentinel-2 patch (needs internet). Omit all of these to skip it; a Sentinel problem never fails the alignment.
+    [switch]$Sentinel,
+
+    [string]$FlightDate,
+
+    [string]$ImagesDir,
+
+    [string]$OdmProject,
+
+    [ValidateSet('rtk', 'ppk', 'gcp', 'gnss_only', 'unknown')]
+    [string]$DronePositioning,
+
+    [string]$SentinelConfig,
+
+    [string]$SentinelMsBands,
+
+    [switch]$SentinelStrict
 )
 
 Set-StrictMode -Version Latest
@@ -228,6 +246,7 @@ function Select-OutputFolder {
     return $dialog.SelectedPath
 }
 
+$askedForInputs = -not ($RgbPath -and $MsPath)
 if ($RgbPath) {
     $RgbPath = Remove-OuterQuotes $RgbPath
 }
@@ -307,6 +326,42 @@ if ($ManualModel) {
 }
 if ($PixelConvention) {
     $pythonArgs += @('--pixel-convention', $PixelConvention)
+}
+
+# Ask once when the launcher was started without paths (the drag-and-drop flow) and no Sentinel option was given.
+$sentinelOptionGiven = $Sentinel -or $FlightDate -or $ImagesDir -or $OdmProject -or $SentinelConfig -or $SentinelMsBands
+if (-not $sentinelOptionGiven -and $askedForInputs) {
+    $answer = Read-Host 'Also fetch & align the matching Sentinel-2 patch? Needs internet. [y/N]'
+    if ($answer -match '^(y|yes)$') {
+        $Sentinel = [switch]$true
+        $FlightDate = Read-Host 'Flight date YYYY-MM-DD (press Enter to detect it from photos / folder names)'
+    }
+}
+if ($Sentinel) {
+    $pythonArgs += '--sentinel'
+    if ($FlightDate) {
+        $pythonArgs += @('--flight-date', $FlightDate.Trim())
+    }
+    if ($ImagesDir) {
+        $pythonArgs += @('--images-dir', (Resolve-Path -LiteralPath (Remove-OuterQuotes $ImagesDir)).Path)
+    }
+    if ($OdmProject) {
+        $pythonArgs += @('--odm-project', (Resolve-Path -LiteralPath (Remove-OuterQuotes $OdmProject)).Path)
+    }
+    if ($DronePositioning) {
+        $pythonArgs += @('--drone-positioning', $DronePositioning)
+    }
+    if ($SentinelConfig) {
+        $pythonArgs += @('--sentinel-config', (Resolve-Path -LiteralPath (Remove-OuterQuotes $SentinelConfig)).Path)
+    }
+    if ($SentinelMsBands) {
+        $pythonArgs += @('--sentinel-ms-bands', $SentinelMsBands)
+    }
+    if ($SentinelStrict) {
+        $pythonArgs += '--sentinel-strict'
+    }
+} elseif ($FlightDate -or $ImagesDir -or $OdmProject -or $DronePositioning -or $SentinelConfig -or $SentinelMsBands -or $SentinelStrict) {
+    Write-Warning 'Sentinel options were given without -Sentinel; they are ignored.'
 }
 
 Write-Host "Running $Mode alignment"
